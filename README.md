@@ -21,6 +21,9 @@ Pictures, players, friends and painting progress are stored in the `/data` volum
 upgrades. To manage the featured pictures from the host instead of rebuilding the image, mount your own folder:
 `-v "$PWD/featured:/app/featured:ro"` (see the commented line in `docker-compose.yml`).
 
+To put it on the internet for free (Oracle Cloud, Google Cloud, AWS, Render or your own computer), with
+automatic HTTPS, follow **[DEPLOY.md](DEPLOY.md)**.
+
 ## Run it without Docker
 
 Requires Node.js 18 or newer.
@@ -30,9 +33,8 @@ npm install
 npm start            # http://localhost:3000  (set PORT to change)
 ```
 
-Other people on your network can join through `http://<your-computer's-IP>:3000`. To play over the internet, host
-it anywhere that runs Node and supports WebSockets (Render, Railway, Fly.io, a VPS…), or expose your local server with
-a tunnel such as `cloudflared tunnel --url http://localhost:3000`.
+Other people on your network can join through `http://<your-computer's-IP>:3000`. To play over the internet, see
+[DEPLOY.md](DEPLOY.md).
 
 ## How to play
 

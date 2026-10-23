@@ -1,0 +1,80 @@
+{
+  "_help": "Featured pictures shown on the home page. One is picked as the Picture of the day: an entry whose \"date\" (YYYY-MM-DD) is today wins, otherwise they rotate daily in this order. image is a path inside this folder (PNG, JPEG, WebP or SVG). colors: 4-30, detail: low | medium | high. Artist links must start with https://. The sample art and the example.com links below are placeholders: replace them with your featured artists.",
+  "pictures": [
+    {
+      "id": "mountain-sunset",
+      "title": "Mountain Sunset",
+      "image": "art/mountain-sunset.svg",
+      "colors": 16,
+      "detail": "medium",
+      "artist": {
+        "name": "Paint Together Studio",
+        "bio": "Sample artwork bundled with the game. Swap in your own featured artists in featured/featured.json.",
+        "links": [
+          { "label": "Website", "url": "https://example.com/" },
+          { "label": "Instagram", "url": "https://example.com/instagram" }
+        ]
+      }
+    },
+    {
+      "id": "lighthouse",
+      "title": "The Lighthouse",
+      "image": "art/lighthouse.svg",
+      "colors": 14,
+      "detail": "medium",
+      "artist": {
+        "name": "Paint Together Studio",
+        "bio": "Sample artwork bundled with the game.",
+        "links": [{ "label": "Website", "url": "https://example.com/" }]
+      }
+    },
+    {
+      "id": "balloons",
+      "title": "Balloon Festival",
+      "image": "art/balloons.svg",
+      "colors": 16,
+      "detail": "medium",
+      "artist": {
+        "name": "Paint Together Studio",
+        "bio": "Sample artwork bundled with the game.",
+        "links": [{ "label": "Website", "url": "https://example.com/" }]
+      }
+    },
+    {
+      "id": "koi-pond",
+      "title": "Koi Pond",
+      "image": "art/koi-pond.svg",
+      "colors": 14,
+      "detail": "medium",
+      "artist": {
+        "name": "Paint Together Studio",
+        "bio": "Sample artwork bundled with the game.",
+        "links": [{ "label": "Website", "url": "https://example.com/" }]
+      }
+    },
+    {
+      "id": "fruit-bowl",
+      "title": "Fruit Bowl",
+      "image": "art/fruit-bowl.svg",
+      "colors": 18,
+      "detail": "medium",
+      "artist": {
+        "name": "Paint Together Studio",
+        "bio": "Sample artwork bundled with the game.",
+        "links": [{ "label": "Website", "url": "https://example.com/" }]
+      }
+    },
+    {
+      "id": "city-night",
+      "title": "City at Night",
+      "image": "art/city-night.svg",
+      "colors": 12,
+      "detail": "medium",
+      "artist": {
+        "name": "Paint Together Studio",
+        "bio": "Sample artwork bundled with the game.",
+        "links": [{ "label": "Website", "url": "https://example.com/" }]
+      }
+    }
+  ]
+}

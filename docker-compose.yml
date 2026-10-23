@@ -1,0 +1,14 @@
+services:
+  paint-together:
+    build: .
+    image: paint-together
+    ports:
+      - "3000:3000"
+    volumes:
+      - paint-data:/data
+      # Uncomment to manage featured pictures and artists from a folder on the host:
+      # - ./featured:/app/featured:ro
+    restart: unless-stopped
+
+volumes:
+  paint-data:

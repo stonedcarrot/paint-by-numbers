@@ -1,0 +1,8 @@
+# Render Blueprint for a free trial deployment (see DEPLOY.md: free Render services sleep when idle and
+# lose saved games on restart).
+services:
+  - type: web
+    name: paint-together
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz

@@ -1,0 +1,35 @@
+# Public deployment: the game plus Caddy for automatic HTTPS.
+# Usage (from the repo root):
+#   echo "DOMAIN=yourname.duckdns.org" > deploy/.env
+#   docker compose -f deploy/docker-compose.https.yml --env-file deploy/.env up -d --build
+services:
+  paint-together:
+    build: ..
+    image: paint-together
+    restart: unless-stopped
+    volumes:
+      - paint-data:/data
+      # - ../featured:/app/featured:ro   # manage featured pictures from the host
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - paint-together
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN, e.g. DOMAIN=yourname.duckdns.org}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  paint-data:
+  caddy-data:
+  caddy-config:

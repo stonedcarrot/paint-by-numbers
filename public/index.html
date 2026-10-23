@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Paint Together</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!-- HOME -->
+  <section id="home" class="screen">
+    <header class="topbar">
+      <div class="brand"><span class="logo">🎨</span> Paint Together</div>
+      <label class="name-field">You are
+        <input id="nameInput" maxlength="24" placeholder="Your name" autocomplete="off">
+      </label>
+    </header>
+    <section class="featured-wrap" id="featuredWrap">
+      <div class="card potd" id="potd"></div>
+      <h2 class="section-title">More pictures to paint</h2>
+      <div class="gallery" id="gallery"></div>
+    </section>
+    <main class="home-grid">
+      <div class="col">
+        <div class="card upload-card" id="dropZone">
+          <h2>Paint your own picture</h2>
+          <p>Upload any photo or drawing. It becomes a paint-by-numbers canvas you can paint alone, or share the link so up to 10 people paint it together.</p>
+          <label class="btn primary big">
+            Choose an image
+            <input type="file" id="fileInput" accept="image/*" hidden>
+          </label>
+          <p class="hint">…or drop an image here</p>
+        </div>
+        <div class="card">
+          <h2>Join a picture</h2>
+          <form id="joinForm" class="row">
+            <input id="joinInput" placeholder="Paste a link or 6-letter code" autocomplete="off">
+            <button class="btn primary" type="submit">Join</button>
+          </form>
+        </div>
+        <div class="card">
+          <h2>Your pictures</h2>
+          <ul id="recentList" class="list"><li class="empty">Pictures you create or join will show up here.</li></ul>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card friends-card">
+          <h2>Friends</h2>
+          <div class="friends-panel" data-friends></div>
+        </div>
+      </div>
+    </main>
+  </section>
+
+  <!-- CREATE -->
+  <section id="create" class="screen hidden">
+    <header class="topbar">
+      <button class="btn ghost" id="createBack">← Back</button>
+      <div class="brand">New picture</div>
+      <span></span>
+    </header>
+    <main class="create-grid">
+      <div class="preview-wrap">
+        <canvas id="previewCanvas"></canvas>
+        <div class="preview-busy hidden" id="previewBusy"><div class="spinner"></div>Making your numbers…</div>
+      </div>
+      <aside class="card create-options">
+        <label>Title <input id="titleInput" maxlength="60" placeholder="My picture"></label>
+        <label>Colours <b id="colorsVal">16</b>
+          <input type="range" id="colorsInput" min="4" max="30" value="16">
+        </label>
+        <label>Detail
+          <select id="detailInput">
+            <option value="low">Low: big, easy regions</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High: lots of small regions</option>
+          </select>
+        </label>
+        <div class="seg">
+          <button class="btn small active" data-view="numbers">Numbers</button>
+          <button class="btn small" data-view="painted">Finished look</button>
+          <button class="btn small" data-view="original">Original</button>
+        </div>
+        <p class="stats" id="genStats">&nbsp;</p>
+        <button class="btn primary big" id="createRoomBtn" disabled>Start painting</button>
+        <p class="stats">You'll get an invite link you can share any time if you want company.</p>
+      </aside>
+    </main>
+  </section>
+
+  <!-- GAME -->
+  <section id="game" class="screen hidden">
+    <header class="topbar game-bar">
+      <button class="btn ghost" id="gameBack" title="Back to home">←</button>
+      <div class="game-title">
+        <div id="gameTitle">Picture</div>
+        <div class="credit hidden" id="credit"><span id="modeChip" class="chip"></span> by <button class="linkish" id="creditName"></button></div>
+        <div class="progress"><div id="progressFill"></div></div>
+      </div>
+      <div class="players" id="playersList"></div>
+      <div class="bar-actions">
+        <button class="btn primary" id="copyLinkBtn">🔗 Invite link</button>
+        <button class="btn ghost icon" id="peekBtn" title="Peek at the original">👁</button>
+        <button class="btn ghost icon" id="friendsBtn" title="Friends">👥<span class="badge hidden" id="friendsBadge"></span></button>
+        <button class="btn ghost icon" id="chatBtn" title="Chat">💬<span class="badge hidden" id="chatBadge"></span></button>
+      </div>
+    </header>
+    <div class="game-main">
+      <div class="viewport" id="viewport">
+        <canvas id="boardCanvas"></canvas>
+        <div id="cursors"></div>
+        <img id="peekImg" class="peek hidden" alt="Original picture">
+        <div class="zoom">
+          <button class="btn icon" id="zoomIn" title="Zoom in">＋</button>
+          <button class="btn icon" id="zoomOut" title="Zoom out">－</button>
+          <button class="btn icon" id="zoomFit" title="Fit">⤢</button>
+        </div>
+      </div>
+      <aside class="drawer hidden" id="chatDrawer">
+        <h3>Chat</h3>
+        <ul id="chatLog"></ul>
+        <form id="chatForm" class="row"><input id="chatInput" maxlength="300" placeholder="Say something…" autocomplete="off"><button class="btn primary">Send</button></form>
+      </aside>
+      <aside class="drawer hidden" id="artistDrawer">
+        <h3>About the artist</h3>
+        <div id="artistPanel"></div>
+      </aside>
+      <aside class="drawer hidden" id="friendsDrawer">
+        <h3>Friends</h3>
+        <div class="friends-panel" data-friends data-ingame></div>
+      </aside>
+    </div>
+    <footer class="palette" id="palette"></footer>
+  </section>
+
+  <div id="doneOverlay" class="overlay hidden">
+    <div class="card done-card">
+      <h2>🎉 Picture complete!</h2>
+      <canvas id="doneCanvas"></canvas>
+      <div id="doneArtist"></div>
+      <ol id="scoreList"></ol>
+      <div class="row center">
+        <button class="btn primary" id="downloadBtn">Download picture</button>
+        <button class="btn" id="doneClose">Keep looking</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+
+  <script src="/pbn.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
