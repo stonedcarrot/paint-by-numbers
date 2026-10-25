@@ -1,0 +1,36 @@
+# Portainer stack: the game plus Caddy for automatic HTTPS, with no extra files needed.
+# In Portainer: Stacks > Add stack, paste this (or point "Repository" at this file),
+# then add an environment variable DOMAIN=yourname.duckdns.org. See DEPLOY.md > Portainer.
+#
+# Web editor / Upload: build the image on the server first with `docker build -t paint-together .`
+# Repository: the image is built from the repo automatically.
+services:
+  paint-together:
+    build: ..
+    image: paint-together
+    restart: unless-stopped
+    environment:
+      # Password for the admin page at /admin (approve storage requests). Leave empty to turn it off.
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      # Storage each player gets for their own uploaded pictures, in MB.
+      UPLOAD_QUOTA_MB: ${UPLOAD_QUOTA_MB:-100}
+    volumes:
+      - paint-data:/data
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - paint-together
+    command: caddy reverse-proxy --from ${DOMAIN:?Set DOMAIN} --to paint-together:3000
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  paint-data:
+  caddy-data:
+  caddy-config:

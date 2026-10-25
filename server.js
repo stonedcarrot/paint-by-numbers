@@ -14,6 +14,10 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const FEATURED_DIR = path.resolve(process.env.FEATURED_DIR || path.join(__dirname, 'featured'));
 const MAX_PLAYERS = 10;
+const MB = 1000 * 1000;
+// Storage each player gets for their own uploaded pictures; admins can raise it per player.
+const DEFAULT_QUOTA = (Number(process.env.UPLOAD_QUOTA_MB) || 100) * MB;
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const PLAYER_COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
   '#42d4f4', '#f032e6', '#9a6324', '#469990', '#808000'];
 
@@ -53,12 +57,20 @@ function randomCode(len) {
 }
 const cleanName = (s) => String(s || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 24) || 'Painter';
 
+// ---------- storage quota ----------
+const quotaOf = (u) => u.quotaBytes ?? DEFAULT_QUOTA;
+const usedBy = (u) => (u.uploads || []).reduce((n, x) => n + x.bytes, 0);
+function storagePayload(u) {
+  return { type: 'storage', used: usedBy(u), limit: quotaOf(u), request: u.storageRequest || null };
+}
+const sendStorage = (u) => sendUser(u.id, storagePayload(u));
+
 function createUser(name) {
   const codes = usersByCode();
   let code;
   do code = randomCode(6); while (codes.has(code));
   const u = { id: randomId(), token: randomId(24), name: cleanName(name), code,
-    friends: [], incoming: [], outgoing: [], recent: [] };
+    friends: [], incoming: [], outgoing: [], recent: [], uploads: [] };
   users.set(u.id, u);
   saveUsers();
   return u;
@@ -122,11 +134,14 @@ const ROOM_ID_RE = /^[A-Z2-9]{6}$/;
 
 function serializeRoom(room) {
   return { id: room.id, title: room.title, createdAt: room.createdAt, createdBy: room.createdBy,
-    completedAt: room.completedAt || null, puzzle: room.puzzle, paintedBy: room.paintedBy,
+    completedAt: room.completedAt || null, paintedBy: room.paintedBy,
+    ...(room.puzzleRef ? { puzzleRef: room.puzzleRef } : { puzzle: room.puzzle }),
+    bytes: room.bytes || 0,
     names: room.names, chat: room.chat, mode: room.mode || 'private', featuredId: room.featuredId || null,
     artist: room.artist || null };
 }
 function hydrateRoom(data) {
+  if (data.puzzleRef && !data.puzzle) data.puzzle = featured.loadRef(data.puzzleRef);
   return { ...data, players: new Map(),
     paintedCount: data.paintedBy.filter((x) => x !== null).length };
 }
@@ -141,10 +156,19 @@ function getRoom(id) {
 }
 const saveRoom = (room) => saveLater(roomFile(room.id), () => serializeRoom(room));
 
+function deleteRoomData(room) {
+  const file = roomFile(room.id);
+  clearTimeout(saveTimers.get(file));
+  saveTimers.delete(file);
+  fs.rm(file, { force: true }, () => {});
+  rooms.delete(room.id);
+}
+
 function validatePuzzle(p) {
   if (!p || typeof p !== 'object') throw new Error('missing puzzle');
   const { w, h, palette, regions, rle } = p;
-  if (!Number.isInteger(w) || !Number.isInteger(h) || w < 8 || h < 8 || w > 800 || h > 800) throw new Error('bad size');
+  if (!Number.isInteger(w) || !Number.isInteger(h) || w < 8 || h < 8 ||
+    Math.max(w, h) > PBN.MAX_LONG || Math.min(w, h) > PBN.MAX_SHORT) throw new Error('bad size');
   if (!Array.isArray(palette) || palette.length < 1 || palette.length > 60) throw new Error('bad palette');
   if (!palette.every((c) => /^#[0-9a-f]{6}$/i.test(c))) throw new Error('bad colour');
   if (!Array.isArray(regions) || regions.length < 1 || regions.length > 5000) throw new Error('bad regions');
@@ -163,7 +187,7 @@ function validatePuzzle(p) {
   }
   if (seen.includes(0)) throw new Error('empty region');
   let preview = null;
-  if (typeof p.preview === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(p.preview) && p.preview.length < 400000) {
+  if (typeof p.preview === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(p.preview) && p.preview.length < 1500000) {
     preview = p.preview;
   }
   return { w, h, palette, regions: clean, rle, preview };
@@ -273,7 +297,8 @@ function recentRooms(u) {
     const r = getRoom(id);
     if (!r) return null;
     return { id, title: r.title, progress: r.paintedCount / r.paintedBy.length,
-      players: r.players.size, complete: !!r.completedAt };
+      players: r.players.size, complete: !!r.completedAt,
+      mine: r.createdBy === u.id && r.mode !== 'public', bytes: r.bytes || 0 };
   }).filter(Boolean);
 }
 
@@ -290,6 +315,7 @@ const handlers = {
     sockets.get(u.id).add(ws);
     send(ws, { type: 'welcome', user: { id: u.id, token: u.token, name: u.name, code: u.code }, recent: recentRooms(u) });
     send(ws, friendsPayload(u));
+    send(ws, storagePayload(u));
     notifyFriendsOf(u.id);
   },
 
@@ -314,8 +340,56 @@ const handlers = {
     try { puzzle = validatePuzzle(m.puzzle); } catch (e) {
       return send(ws, { type: 'error', code: 'badpuzzle', message: 'Could not create the picture: ' + e.message });
     }
-    const room = createRoom(ws.user, m.title, puzzle);
+    const u = ws.user;
+    const bytes = Buffer.byteLength(JSON.stringify(puzzle));
+    if (usedBy(u) + bytes > quotaOf(u)) {
+      return send(ws, { type: 'error', code: 'quota', message:
+        `This picture needs ${(bytes / MB).toFixed(1)} MB but you have ${((quotaOf(u) - usedBy(u)) / MB).toFixed(1)} MB left. ` +
+        'Delete an old picture or request more space.' });
+    }
+    const room = createRoom(u, m.title, puzzle, { bytes, uploaded: true });
+    (u.uploads = u.uploads || []).push({ roomId: room.id, bytes });
+    saveUsers();
+    sendStorage(u);
     send(ws, { type: 'roomCreated', roomId: room.id });
+  },
+
+  // creators can delete their own pictures (not the shared featured canvases) to free space
+  deleteRoom(ws, m) {
+    const u = ws.user;
+    const room = getRoom(String(m.roomId || ''));
+    if (!room || room.createdBy !== u.id || room.mode === 'public') {
+      return send(ws, { type: 'error', code: 'delete', message: 'Only the person who created a picture can delete it.' });
+    }
+    for (const p of [...room.players.values()]) {
+      send(p.ws, { type: 'roomDeleted', roomId: room.id, title: room.title });
+      leaveRoom(p.ws);
+    }
+    deleteRoomData(room);
+    u.uploads = (u.uploads || []).filter((x) => x.roomId !== room.id);
+    pull(u.recent, room.id);
+    saveUsers();
+    sendStorage(u);
+    send(ws, { type: 'recent', recent: recentRooms(u) });
+  },
+
+  requestStorage(ws, m) {
+    const u = ws.user;
+    const mb = Math.round(Number(m.mb));
+    if (!Number.isFinite(mb) || mb <= quotaOf(u) / MB || mb > 100000) {
+      return send(ws, { type: 'error', code: 'request', message: 'Ask for more than your current limit.' });
+    }
+    u.storageRequest = { mb, message: String(m.message || '').replace(/[\u0000-\u0009\u000b-\u001f]/g, '').slice(0, 300),
+      at: Date.now() };
+    saveUsers();
+    sendStorage(u);
+    console.log(`Storage request: ${u.name} (${u.id}) asks for ${mb} MB`);
+  },
+
+  cancelStorageRequest(ws) {
+    ws.user.storageRequest = null;
+    saveUsers();
+    sendStorage(ws.user);
   },
 
   join(ws, m) { joinRoom(ws, m.roomId); },
@@ -323,11 +397,11 @@ const handlers = {
   async playFeatured(ws, m) {
     const pic = featured.get(String(m.id || ''));
     if (!pic) return send(ws, { type: 'error', code: 'nofeatured', message: 'That featured picture is no longer available.' });
-    let puzzle;
-    try { puzzle = await featured.puzzleFor(pic); } catch {
+    let puzzle, ref;
+    try { ({ puzzle, ref } = await featured.puzzleFor(pic)); } catch {
       return send(ws, { type: 'error', code: 'nofeatured', message: 'That picture could not be prepared. Try another one.' });
     }
-    const extra = { featuredId: pic.id, artist: pic.artist };
+    const extra = { featuredId: pic.id, artist: pic.artist, puzzleRef: ref };
     if (m.mode === 'together') {
       let room = openFeaturedRoom(pic.id);
       if (!room) {
@@ -447,6 +521,70 @@ const handlers = {
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
 
+// ---------- admin ----------
+function adminUsers() {
+  return [...users.values()].map((u) => ({
+    id: u.id, name: u.name, code: u.code, used: usedBy(u), limit: quotaOf(u),
+    pictures: (u.uploads || []).length, request: u.storageRequest || null,
+  })).sort((a, b) => (!!b.request - !!a.request) || ((b.request?.at || 0) - (a.request?.at || 0)) || b.used - a.used);
+}
+
+function readJson(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 10000) { reject(new Error('too big')); req.destroy(); } });
+    req.on('end', () => { try { resolve(JSON.parse(body || '{}')); } catch (e) { reject(e); } });
+  });
+}
+
+async function handleAdmin(req, res, route) {
+  const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+  if (!ADMIN_TOKEN) return json(503, { error: 'Admin is turned off. Set the ADMIN_TOKEN environment variable and restart.' });
+  const given = (req.headers.authorization || '').replace(/^Bearer /, '');
+  if (!given || !tokenMatches(ADMIN_TOKEN, given)) {
+    await new Promise((r) => setTimeout(r, 800)); // slow down guessing
+    return json(401, { error: 'Wrong admin token.' });
+  }
+  if (route === 'users' && req.method === 'GET') return json(200, { defaultLimit: DEFAULT_QUOTA, users: adminUsers() });
+  if (req.method !== 'POST') return json(405, { error: 'Method not allowed' });
+  let body;
+  try { body = await readJson(req); } catch { return json(400, { error: 'Bad JSON' }); }
+  const u = users.get(body.userId);
+  if (!u) return json(404, { error: 'No such player' });
+  if (route === 'quota') {
+    const mb = Number(body.limitMB);
+    if (!Number.isFinite(mb) || mb < 0 || mb > 1000000) return json(400, { error: 'Bad limit' });
+    u.quotaBytes = Math.round(mb * MB);
+    u.storageRequest = null;
+    saveUsers();
+    sendStorage(u);
+    sendUser(u.id, { type: 'notice', message: `Your picture storage is now ${mb} MB.` });
+    return json(200, { ok: true });
+  }
+  if (route === 'deny') {
+    u.storageRequest = null;
+    saveUsers();
+    sendStorage(u);
+    sendUser(u.id, { type: 'notice', message: 'Your request for more storage was not approved.' });
+    return json(200, { ok: true });
+  }
+  return json(404, { error: 'Not found' });
+}
+
+// Browser protections for every page: only this site's own scripts run, nothing can frame the game.
+function securityHeaders(req) {
+  const host = String(req.headers.host || '').replace(/[^a-zA-Z0-9.:[\]-]/g, '');
+  return {
+    'Content-Security-Policy': [
+      "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:",
+      `connect-src 'self' ws://${host} wss://${host}`, "worker-src 'self'", "object-src 'none'", "base-uri 'none'",
+      "frame-ancestors 'none'", "form-action 'self'",
+    ].join('; '),
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+  };
+}
+
 const IMAGE_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
   '.gif': 'image/gif', '.svg': 'image/svg+xml' };
 
@@ -454,6 +592,12 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
   let file = url.pathname;
   if (file === '/' || /^\/r\/[A-Za-z0-9]+\/?$/.test(file)) file = '/index.html';
+  if (file === '/admin' || file === '/admin/') file = '/admin.html';
+  const admin = file.match(/^\/api\/admin\/(users|quota|deny)$/);
+  if (admin) {
+    handleAdmin(req, res, admin[1]).catch((e) => { console.error('admin error', e); res.writeHead(500); res.end(); });
+    return;
+  }
   if (file === '/healthz') { res.writeHead(200); return res.end('ok'); }
   if (file === '/api/featured') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
@@ -476,12 +620,13 @@ const server = http.createServer((req, res) => {
   if (!full.startsWith(PUBLIC_DIR + path.sep)) { res.writeHead(403); return res.end(); }
   fs.readFile(full, (err, data) => {
     if (err) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Not found'); }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(full)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(full)] || 'application/octet-stream', 'Cache-Control': 'no-cache',
+      ...securityHeaders(req) });
     res.end(data);
   });
 });
 
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 8 * 1024 * 1024 });
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16 * 1024 * 1024 });
 let nextPid = 1;
 wss.on('connection', (ws) => {
   ws.pid = nextPid++;
@@ -516,5 +661,6 @@ setInterval(() => {
 
 server.listen(PORT, () => {
   console.log(`Paint Together running at http://localhost:${PORT}`);
+  console.log(ADMIN_TOKEN ? `Admin page: http://localhost:${PORT}/admin` : 'Admin page off (set ADMIN_TOKEN to turn it on)');
   featured.warm().then(() => console.log('Featured pictures ready'));
 });

@@ -102,6 +102,9 @@ the Copy link button works everywhere.
 
 ## [C] AWS (free for about 6 months)
 
+> Deploying on EC2 for real? Follow **[deploy/AWS-EC2-SECURE.md](deploy/AWS-EC2-SECURE.md)**: the same steps with your
+> own domain, Let's Encrypt, a locked-down server and the admin page kept off the internet.
+
 1. **Sign up** at <https://aws.amazon.com/free/> and choose the **Free plan**.
 2. **Create the server:** EC2 → **Launch instance**.
    - AMI: **Ubuntu Server 24.04 LTS**. Instance type: **t3.micro** (or t2.micro if that is what's marked
@@ -133,10 +136,14 @@ These steps are the same for Oracle, Google and AWS (Ubuntu). Run them over SSH.
    cd paint-together
    ```
    (Or upload the zip with `scp paint-together.zip ubuntu@YOUR_IP:` and `unzip` it.)
-3. **Set your address:**
+3. **Set your address** and an admin password (for approving storage requests at `/admin`):
    ```bash
    echo "DOMAIN=mypaint.duckdns.org" > deploy/.env
+   echo "ADMIN_TOKEN=$(openssl rand -hex 24)" >> deploy/.env
+   cat deploy/.env   # note the ADMIN_TOKEN: it's your admin password
    ```
+   This setup keeps the admin page off the public site. Open it through an SSH tunnel:
+   `ssh -L 8765:127.0.0.1:3000 youruser@YOUR_IP`, then <http://localhost:8765/admin>.
 4. **Start it:**
    ```bash
    docker compose -f deploy/docker-compose.https.yml --env-file deploy/.env up -d --build
@@ -145,6 +152,68 @@ These steps are the same for Oracle, Google and AWS (Ubuntu). Run them over SSH.
 5. **Open `https://mypaint.duckdns.org`.** That's the link to share.
 
 Both containers restart automatically after a reboot or crash.
+
+## Deploying with Portainer
+
+If your server already runs [Portainer](https://www.portainer.io), deploy the game as a **stack** using
+`deploy/portainer-stack.yml`. It runs the game plus Caddy for automatic HTTPS and needs no other files on the server.
+First point your domain (e.g. DuckDNS) at the server and make sure ports 80 and 443 are open (see your provider's
+steps above).
+
+**Option 1: from the GitHub repository** (the image is built for you)
+
+1. Portainer → your environment → **Stacks** → **Add stack**, and name it `paint-together`.
+2. Build method: **Repository**.
+   - Repository URL: `https://github.com/stonedcarrot/paint-by-numbers`
+   - Repository reference: `refs/heads/main`
+   - Compose path: `deploy/portainer-stack.yml`
+   - If the repository is private, turn on **Authentication** and use a GitHub personal access token.
+3. Under **Environment variables**, add `DOMAIN` = `mypaint.duckdns.org`, and `ADMIN_TOKEN` = a long random
+   password to turn on the admin page at `/admin` for approving storage requests (see README). Optionally add
+   `UPLOAD_QUOTA_MB` to change the 100 MB default.
+4. Click **Deploy the stack**. The first deploy takes a few minutes while the image builds.
+5. To update later, open the stack and click **Pull and redeploy**, or turn on **Automatic updates** (GitOps) to
+   redeploy whenever the repository changes.
+
+**Option 2: paste it into the web editor** (no GitHub needed)
+
+1. Copy the code to the server and build the image once:
+   ```bash
+   unzip paint-together.zip && cd paint-together
+   docker build -t paint-together .
+   ```
+2. Portainer → **Stacks** → **Add stack** → **Web editor**, and paste in the contents of
+   `deploy/portainer-stack.yml`. **Delete the line `build: ..`**, because the web editor has no code to build from.
+3. Add the environment variables `DOMAIN` = `mypaint.duckdns.org` and `ADMIN_TOKEN` = a long random password
+   (optionally `UPLOAD_QUOTA_MB`), then click **Deploy the stack**.
+4. To update later, rebuild the image (`git pull` or unzip the new version, then `docker build -t paint-together .`).
+   Then open the stack in Portainer and click **Update the stack**.
+
+**Already running a reverse proxy on ports 80 and 443?** See
+[Sharing ports 80/443 with an existing nginx](#sharing-ports-80443-with-an-existing-nginx) below.
+
+### Sharing ports 80/443 with an existing nginx
+
+Only one container can own ports 80 and 443, so let your existing nginx receive everything and route by domain:
+it picks the `server` block whose `server_name` matches the address the visitor typed.
+
+1. Create a shared Docker network once: `docker network create proxy`.
+2. Attach your nginx container to it. In your nginx stack, add `networks: [proxy]` to the nginx service (keeping
+   any networks it already uses) and declare `proxy` as `external: true` at the bottom, then redeploy that stack.
+3. Deploy the game with `deploy/portainer-stack-behind-proxy.yml` instead of `portainer-stack.yml`. It publishes no
+   ports and joins the `proxy` network as `paint-together`.
+4. Point the new domain's DNS at the same server IP.
+5. Add `deploy/nginx-paint-together.conf` to your nginx config (replace `paint.example.com`), get a certificate
+   for the new domain the same way you did for your other site (for example
+   `certbot certonly --webroot -w /var/www/certbot -d paint.example.com`), then reload nginx with
+   `nginx -t && nginx -s reload`.
+
+The `Upgrade` and `Connection` lines in that file are required: without them painting won't sync between players.
+With **Nginx Proxy Manager**, do steps 1 to 4, then add a Proxy Host for the new domain with forward host
+`paint-together`, port `3000`, **Websockets Support** on, and a Let's Encrypt certificate from the SSL tab.
+
+Saved games are in the `paint-together_paint-data` volume (Portainer → **Volumes**). The stack name is the prefix, so
+use that name in the [Backups](#backups) commands instead of `deploy_paint-data`.
 
 ## [D] Render (quick demo, progress isn't kept)
 

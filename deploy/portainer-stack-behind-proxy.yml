@@ -1,0 +1,26 @@
+# Portainer stack for a server that already runs a reverse proxy (nginx, Nginx Proxy Manager, Traefik) on 80/443.
+# No ports are published: your proxy reaches the game as http://paint-together:3000 over the shared
+# "proxy" network. Create that network once with `docker network create proxy`, and attach your proxy's
+# container to it too. See DEPLOY.md > "Sharing ports 80/443 with an existing nginx".
+services:
+  paint-together:
+    build: ..
+    image: paint-together
+    container_name: paint-together
+    restart: unless-stopped
+    environment:
+      # Password for the admin page at /admin (approve storage requests). Leave empty to turn it off.
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      # Storage each player gets for their own uploaded pictures, in MB.
+      UPLOAD_QUOTA_MB: ${UPLOAD_QUOTA_MB:-100}
+    volumes:
+      - paint-data:/data
+    networks:
+      - proxy
+
+volumes:
+  paint-data:
+
+networks:
+  proxy:
+    external: true

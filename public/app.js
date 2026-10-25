@@ -78,6 +78,13 @@
       while (outbox.length) ws.send(JSON.stringify(outbox.shift()));
     },
     recent(m) { renderRecent(m.recent); },
+    storage(m) { state.storage = m; renderStorage(); updateCreateStats(); },
+    roomDeleted(m) {
+      if (state.room && state.room.id === m.roomId) {
+        toast(`“${m.title}” was deleted by its creator.`, null, 5000);
+        go('/');
+      }
+    },
     nameSet(m) { store.set('name', m.name); toast('Name saved'); },
     friends(m) { state.friends = m; renderFriends(); },
     notice(m) { toast(m.message); },
@@ -87,7 +94,14 @@
         // stay where we were: in the current picture, or back home
         if (state.room) { history.replaceState({}, '', '/r/' + state.room.id); show('game'); } else go('/', true);
       }
-      if (m.code === 'badpuzzle') $('#createRoomBtn').disabled = false;
+      if (m.code === 'badpuzzle' || m.code === 'quota') $('#createRoomBtn').disabled = false;
+      if (m.code === 'quota') {
+        // over the limit: back home with the request form open
+        createImage = null;
+        showStorageForm = true;
+        go('/');
+        renderStorage();
+      }
     },
     roomCreated(m) { go('/r/' + m.roomId); },
     joined(m) { enterRoom(m.room, m.you); },
@@ -167,7 +181,12 @@
           el('div', { class: 'sub' }, r.complete ? 'Finished' : `${Math.floor(r.progress * 100)}% painted` +
             (r.players ? ` · ${r.players} painting now` : ''))),
         el('div', { class: 'mini-progress' }, el('div', { style: `width:${r.progress * 100}%` })),
-        el('button', { class: 'btn small', onclick: () => go('/r/' + r.id) }, 'Open')));
+        el('button', { class: 'btn small', onclick: () => go('/r/' + r.id) }, 'Open'),
+        r.mine ? el('button', { class: 'btn small ghost', title: 'Delete this picture', onclick: () => {
+          if (confirm(`Delete “${r.title}”? Everyone loses it and its painting progress. This can't be undone.`)) {
+            send({ type: 'deleteRoom', roomId: r.id });
+          }
+        } }, '🗑') : null));
     }
   }
 
@@ -224,6 +243,43 @@
           p.playing ? el('div', { class: 'playing' }, `● ${p.playing} painting now`) : null,
           el('div', { class: 'actions' }, ...playButtons(p, false)))));
     }
+  }
+
+  // ---------- picture storage ----------
+  const fmtMB = (b) => (b < 1e6 ? Math.round(b / 1e3) + ' KB' : (b / 1e6).toFixed(b < 10e6 ? 1 : 0) + ' MB');
+  let showStorageForm = false;
+  function renderStorage() {
+    const st = state.storage, box = $('#storageBox');
+    box.textContent = '';
+    if (!st) return;
+    const pct = Math.min(100, st.used / st.limit * 100);
+    box.append(
+      el('div', { class: 'sub' }, `Picture storage: ${fmtMB(st.used)} of ${fmtMB(st.limit)} used`),
+      el('div', { class: 'bar' + (pct > 90 ? ' full' : '') }, el('div', { style: `width:${pct}%` })));
+    if (st.request) {
+      box.append(el('div', { class: 'row' },
+        el('span', { class: 'sub grow' }, `You asked for ${st.request.mb} MB. Waiting for the admin to approve it.`),
+        el('button', { class: 'btn small ghost', onclick: () => send({ type: 'cancelStorageRequest' }) }, 'Cancel request')));
+      return;
+    }
+    if (!showStorageForm) {
+      box.append(el('button', { class: 'btn small', id: 'moreSpaceBtn', onclick: () => { showStorageForm = true; renderStorage(); } }, 'Request more space'));
+      return;
+    }
+    const suggested = Math.round(st.limit / 1e6) + 100;
+    const form = el('form', { onsubmit: (e) => {
+      e.preventDefault();
+      send({ type: 'requestStorage', mb: Number(form.querySelector('input').value), message: form.querySelector('textarea').value });
+      showStorageForm = false;
+      toast('Request sent. You will get a message here once it is approved.');
+    } },
+    el('label', { class: 'row' }, 'New limit', el('input', { type: 'number', min: String(suggested - 99), step: '1', value: String(suggested), style: 'width:110px' }), 'MB'),
+    el('textarea', { rows: '2', maxlength: '300', placeholder: 'Anything the admin should know (optional)' }),
+    el('div', { class: 'row' },
+      el('button', { class: 'btn small primary' }, 'Send request'),
+      el('button', { class: 'btn small ghost', type: 'button', onclick: () => { showStorageForm = false; renderStorage(); } }, 'Cancel')));
+    box.append(form);
+    if (!$('#home').classList.contains('hidden')) box.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
   // ---------- friends ----------
@@ -302,7 +358,6 @@
   // ---------- create ----------
   let createImage = null, genPuzzle = null, genSeq = 0, previewView = 'numbers', previewUrl = null;
   const worker = new Worker('/pbn-worker.js');
-  const DETAIL = PBN.DETAIL;
 
   function loadFile(file) {
     if (!file || !file.type.startsWith('image/')) return toast('Please choose an image file.');
@@ -312,12 +367,12 @@
       createImage = img;
       $('#titleInput').value = file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').slice(0, 60);
       // small jpeg of the original for the "peek" button
-      const s = Math.min(1, 480 / Math.max(img.width, img.height));
+      const s = Math.min(1, 960 / Math.max(img.width, img.height));
       const c = el('canvas', { width: Math.round(img.width * s), height: Math.round(img.height * s) });
       const cx = c.getContext('2d');
       cx.fillStyle = '#fff'; cx.fillRect(0, 0, c.width, c.height);
       cx.drawImage(img, 0, 0, c.width, c.height);
-      previewUrl = c.toDataURL('image/jpeg', 0.75);
+      previewUrl = c.toDataURL('image/jpeg', 0.8);
       show('create');
       generate();
     };
@@ -343,10 +398,8 @@
 
   function generate() {
     if (!createImage) return;
-    const d = DETAIL[$('#detailInput').value];
     const img = createImage;
-    const s = Math.min(1, d.side / Math.max(img.width, img.height));
-    const w = Math.max(8, Math.round(img.width * s)), h = Math.max(8, Math.round(img.height * s));
+    const { w, h } = PBN.fitSize(img.naturalWidth || img.width, img.naturalHeight || img.height);
     const c = el('canvas', { width: w, height: h });
     const cx = c.getContext('2d');
     cx.fillStyle = '#fff'; cx.fillRect(0, 0, w, h);
@@ -357,17 +410,33 @@
     $('#previewBusy').classList.remove('hidden');
     $('#createRoomBtn').disabled = true;
     worker.postMessage({ id: seq, imageData: { data: id.data, width: w, height: h },
-      opts: { colors: +$('#colorsInput').value, smoothing: d.smoothing, minRegion: Math.max(4, Math.round(w * h / d.minDiv)) } });
+      opts: PBN.optionsFor($('#detailInput').value, w, h, +$('#colorsInput').value) });
   }
   worker.onmessage = (e) => {
     if (e.data.id !== genSeq) return;
     $('#previewBusy').classList.add('hidden');
     if (!e.data.ok) return toast('Could not process that image: ' + e.data.error);
     genPuzzle = e.data.puzzle;
-    $('#genStats').textContent = `${genPuzzle.regions.length} regions · ${genPuzzle.palette.length} colours · ${genPuzzle.w}×${genPuzzle.h}`;
-    $('#createRoomBtn').disabled = false;
+    const p = genPuzzle;
+    genPayload = { w: p.w, h: p.h, palette: p.palette, preview: previewUrl,
+      regions: p.regions.map((r) => ({ c: r.c, x: r.x, y: r.y, r: r.r })), rle: PBN.encodeRLE(p.regionMap) };
+    genBytes = new Blob([JSON.stringify(genPayload)]).size;
+    updateCreateStats();
     drawPreview();
   };
+
+  let genPayload = null, genBytes = 0;
+  function updateCreateStats() {
+    if (!genPuzzle || !genPayload) return;
+    const st = state.storage;
+    const left = st ? st.limit - st.used : Infinity;
+    const fits = genBytes <= left;
+    $('#genStats').textContent = `${genPuzzle.regions.length} regions · ${genPuzzle.palette.length} colours · ` +
+      `${genPuzzle.w}×${genPuzzle.h} · ${fmtMB(genBytes)}` + (st ? ` (${fmtMB(Math.max(0, left))} of your storage left)` : '');
+    $('#createRoomBtn').disabled = !fits;
+    $('#createRoomBtn').title = fits ? '' : 'Not enough storage left';
+    if (!fits) $('#genStats').textContent += '. Not enough space: delete an old picture or request more on the home page.';
+  }
 
   function drawPreview() {
     if (!genPuzzle) return;
@@ -387,24 +456,22 @@
   }
 
   $('#createRoomBtn').addEventListener('click', () => {
-    if (!genPuzzle) return;
+    if (!genPayload) return;
     $('#createRoomBtn').disabled = true;
-    const p = genPuzzle;
-    send({ type: 'createRoom', title: $('#titleInput').value, puzzle: {
-      w: p.w, h: p.h, palette: p.palette, preview: previewUrl,
-      regions: p.regions.map((r) => ({ c: r.c, x: r.x, y: r.y, r: r.r })),
-      rle: PBN.encodeRLE(p.regionMap),
-    } });
+    send({ type: 'createRoom', title: $('#titleInput').value, puzzle: genPayload });
     createImage = null;
-    setTimeout(() => { $('#createRoomBtn').disabled = false; }, 3000);
+    setTimeout(updateCreateStats, 3000);
   });
 
   // ---------- board rendering ----------
   const rgbOf = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
   const inkFor = (hex) => { const [r, g, b] = rgbOf(hex); return (r * 299 + g * 587 + b * 114) / 1000 > 150 ? '#222' : '#fff'; };
+  const WHITE = [255, 255, 255], HIGHLIGHT = [214, 214, 222], FLASH = [255, 120, 120];
 
+  // Draws the puzzle at S canvas pixels per puzzle pixel. A paint only redraws the box around the regions
+  // involved, so Full HD pictures stay smooth while many people paint.
   class Board {
-    constructor(p, canvas, target = 2200) {
+    constructor(p, canvas, target = 2400) {
       this.p = p;
       this.w = p.w; this.h = p.h;
       this.map = p.map;
@@ -423,62 +490,131 @@
       this.img = this.cctx.createImageData(p.w, p.h);
       this.rgb = p.palette.map(rgbOf);
       this.remaining = new Array(p.palette.length).fill(0);
-      for (const r of p.regions) this.remaining[r.c]++;
-      // border segments between neighbouring regions
+      this.byColor = p.palette.map(() => []);
+      p.regions.forEach((r, i) => { this.remaining[r.c]++; this.byColor[r.c].push(i); });
+      const { w, h, map, n } = this;
+
+      // pixels of each region (bucketed) and each region's bounding box
+      const count = new Int32Array(n + 1);
+      const box = new Int32Array(n * 4);
+      for (let r = 0; r < n; r++) { box[r * 4] = w; box[r * 4 + 1] = h; box[r * 4 + 2] = -1; box[r * 4 + 3] = -1; }
+      for (let i = 0; i < w * h; i++) {
+        const r = map[i], x = i % w, y = (i / w) | 0, b = r * 4;
+        count[r + 1]++;
+        if (x < box[b]) box[b] = x;
+        if (y < box[b + 1]) box[b + 1] = y;
+        if (x > box[b + 2]) box[b + 2] = x;
+        if (y > box[b + 3]) box[b + 3] = y;
+      }
+      for (let r = 0; r < n; r++) count[r + 1] += count[r];
+      const fill = count.slice(0, n);
+      this.pixStart = count;
+      this.pix = new Int32Array(w * h);
+      for (let i = 0; i < w * h; i++) this.pix[fill[map[i]]++] = i;
+      this.box = box;
+
+      // border segments between neighbouring regions, indexed by the row that produced them
       const segs = [];
-      const { w, h, map } = this;
+      this.segRow = new Int32Array(h + 1);
       for (let y = 0; y < h; y++) {
+        this.segRow[y] = segs.length / 5;
         for (let x = 0; x < w; x++) {
           const i = y * w + x, a = map[i];
           if (x < w - 1 && map[i + 1] !== a) segs.push(x + 1, y, 0, a, map[i + 1]);
           if (y < h - 1 && map[i + w] !== a) segs.push(x, y + 1, 1, a, map[i + w]);
         }
       }
+      this.segRow[h] = segs.length / 5;
       this.segs = Int32Array.from(segs);
+      this.numberCap = Math.max(64, Math.max(w, h) * this.S / 45);
+      this.dirty = new Set();
+      this.fullDirty = true;
     }
+    touch(r) { if (r >= 0 && r < this.n) this.dirty.add(r); }
     paint(r) {
       if (r < 0 || r >= this.n || this.painted[r]) return false;
       this.painted[r] = 1;
       this.remaining[this.p.regions[r].c]--;
+      this.touch(r);
       return true;
     }
     unpaint(r) {
       if (!this.painted[r]) return;
       this.painted[r] = 0;
       this.remaining[this.p.regions[r].c]++;
+      this.touch(r);
     }
-    paintAll() { for (let r = 0; r < this.n; r++) this.paint(r); }
+    paintAll() { for (let r = 0; r < this.n; r++) this.paint(r); this.fullDirty = true; }
+    setHighlight(c) {
+      if (c === this.highlight) return;
+      this.highlight = c;
+      this.fullDirty = true; // touches regions all over the picture, so a full redraw is quicker
+    }
+    setFlash(r) { this.touch(this.flash); this.flash = r; this.touch(r); }
     get paintedCount() { return this.painted.reduce((a, b) => a + b, 0); }
     regionAt(x, y) {
       x = Math.floor(x); y = Math.floor(y);
       if (x < 0 || y < 0 || x >= this.w || y >= this.h) return -1;
       return this.map[y * this.w + x];
     }
-    render() {
-      const { ctx, S, w, h, map, painted, p } = this;
-      const d = this.img.data;
-      for (let i = 0; i < w * h; i++) {
-        const r = map[i], o = i * 4;
-        let c;
-        if (r === this.flash) c = [255, 120, 120];
-        else if (painted[r]) c = this.rgb[p.regions[r].c];
-        else if (p.regions[r].c === this.highlight) c = [214, 214, 222];
-        else c = [255, 255, 255];
+    colorOf(r) {
+      if (r === this.flash) return FLASH;
+      if (this.painted[r]) return this.rgb[this.p.regions[r].c];
+      return this.p.regions[r].c === this.highlight ? HIGHLIGHT : WHITE;
+    }
+    setPixels(r) {
+      const d = this.img.data, c = this.colorOf(r);
+      for (let i = this.pixStart[r]; i < this.pixStart[r + 1]; i++) {
+        const o = this.pix[i] * 4;
         d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
       }
-      this.cctx.putImageData(this.img, 0, 0);
+    }
+    // draw everything that changed since the last call
+    render() {
+      if (this.fullDirty || this.dirty.size > 12) {
+        for (let r = 0; r < this.n; r++) this.setPixels(r);
+        this.cctx.putImageData(this.img, 0, 0);
+        this.drawArea(0, 0, this.w, this.h);
+      } else {
+        // one box per changed region (plus a margin for numbers that spill over), merged where they overlap
+        let rects = [];
+        for (const r of this.dirty) {
+          this.setPixels(r);
+          const b = r * 4, m = 3;
+          rects.push([Math.max(0, this.box[b] - m), Math.max(0, this.box[b + 1] - m),
+            Math.min(this.w, this.box[b + 2] + 1 + m), Math.min(this.h, this.box[b + 3] + 1 + m)]);
+        }
+        rects = mergeRects(rects);
+        const area = rects.reduce((a, [x0, y0, x1, y1]) => a + (x1 - x0) * (y1 - y0), 0);
+        if (area > this.w * this.h * 0.5) rects = [[0, 0, this.w, this.h]];
+        for (const [x0, y0, x1, y1] of rects) {
+          this.cctx.putImageData(this.img, 0, 0, x0, y0, x1 - x0, y1 - y0);
+          this.drawArea(x0, y0, x1, y1);
+        }
+      }
+      this.dirty.clear();
+      this.fullDirty = false;
+    }
+    // redraw puzzle pixels [x0,x1) x [y0,y1)
+    drawArea(x0, y0, x1, y1) {
+      const { ctx, S, painted, p, segs } = this;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x0 * S, y0 * S, (x1 - x0) * S, (y1 - y0) * S);
+      ctx.clip();
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(this.colorLayer, 0, 0, w * S, h * S);
+      ctx.drawImage(this.colorLayer, x0, y0, x1 - x0, y1 - y0, x0 * S, y0 * S, (x1 - x0) * S, (y1 - y0) * S);
 
       // borders around anything not yet painted
       const lw = Math.max(1, Math.round(S / 5));
-      const segs = this.segs;
       ctx.beginPath();
-      for (let i = 0; i < segs.length; i += 5) {
+      const from = this.segRow[Math.max(0, y0 - 1)], to = this.segRow[Math.min(this.h, y1 + 1)];
+      for (let k = from; k < to; k++) {
+        const i = k * 5, x = segs[i], y = segs[i + 1];
+        if (x < x0 - 1 || x > x1 + 1 || y < y0 - 1 || y > y1 + 1) continue;
         if (painted[segs[i + 3]] && painted[segs[i + 4]]) continue;
-        const x = segs[i] * S, y = segs[i + 1] * S;
-        if (segs[i + 2] === 0) ctx.rect(x - lw / 2, y, lw, S);
-        else ctx.rect(x, y - lw / 2, S, lw);
+        if (segs[i + 2] === 0) ctx.rect(x * S - lw / 2, y * S, lw, S);
+        else ctx.rect(x * S, y * S - lw / 2, S, lw);
       }
       ctx.fillStyle = '#8d8a93';
       ctx.fill();
@@ -490,13 +626,36 @@
         if (painted[r]) continue;
         const reg = p.regions[r];
         const label = String(reg.c + 1);
-        const size = Math.max(5, Math.min(reg.r * S * (label.length > 1 ? 1.05 : 1.4), 14 * S, 64));
+        const size = Math.max(5, Math.min(reg.r * S * (label.length > 1 ? 1.05 : 1.4), this.numberCap));
+        const half = size / S;
+        if (reg.x + half < x0 || reg.x - half > x1 || reg.y + half < y0 || reg.y - half > y1) continue;
         const hl = reg.c === this.highlight;
         ctx.font = `${hl ? 700 : 500} ${size}px system-ui, sans-serif`;
         ctx.fillStyle = hl ? '#111' : '#6d6a73';
         ctx.fillText(label, reg.x * S, reg.y * S + size * 0.04);
       }
+      ctx.restore();
     }
+  }
+
+  // merge overlapping [x0,y0,x1,y1] boxes so each area is drawn once
+  function mergeRects(rects) {
+    let merged = true;
+    while (merged) {
+      merged = false;
+      outer: for (let i = 0; i < rects.length; i++) {
+        for (let j = i + 1; j < rects.length; j++) {
+          const a = rects[i], b = rects[j];
+          if (a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]) {
+            rects[i] = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+            rects.splice(j, 1);
+            merged = true;
+            break outer;
+          }
+        }
+      }
+    }
+    return rects;
   }
 
   // ---------- game ----------
@@ -578,7 +737,7 @@
   }
   function selectColor(i) {
     state.selected = i;
-    state.board.highlight = i;
+    state.board.setHighlight(i);
     updatePalette();
     queueRender();
     const sw = $(`.swatch[data-c="${i}"]`);
@@ -596,7 +755,7 @@
   function afterPaintChange() {
     const b = state.board;
     if (b.remaining[state.selected] === 0) state.selected = firstRemaining(state.selected);
-    b.highlight = state.selected;
+    b.setHighlight(state.selected);
     const pct = b.paintedCount / b.n;
     $('#progressFill').style.width = pct * 100 + '%';
     $('#progressFill').parentElement.title = Math.floor(pct * 100) + '% painted';
@@ -618,10 +777,11 @@
   function showDone() {
     const b = state.board;
     const done = $('#doneCanvas');
-    done.width = b.w * 3; done.height = b.h * 3;
+    const k = Math.min(3, 1600 / Math.max(b.w, b.h)); // keeps the canvas small enough for phones
+    done.width = Math.round(b.w * k); done.height = Math.round(b.h * k);
     const ctx = done.getContext('2d');
     ctx.imageSmoothingEnabled = false;
-    b.highlight = -1;
+    b.setHighlight(-1);
     b.render();
     ctx.drawImage(b.canvas, 0, 0, done.width, done.height);
     const ol = $('#scoreList');
@@ -745,10 +905,10 @@
     if (r < 0 || b.painted[r]) return;
     const want = b.p.regions[r].c;
     if (want !== state.selected) {
-      b.flash = r;
+      b.setFlash(r);
       queueRender();
       clearTimeout(flashTimer);
-      flashTimer = setTimeout(() => { b.flash = -1; queueRender(); }, 350);
+      flashTimer = setTimeout(() => { b.setFlash(-1); queueRender(); }, 350);
       const sw = $(`.swatch[data-c="${want}"]`);
       if (sw) { sw.classList.remove('shake'); void sw.offsetWidth; sw.classList.add('shake'); }
       return;

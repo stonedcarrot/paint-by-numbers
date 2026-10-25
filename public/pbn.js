@@ -206,40 +206,60 @@
     return { map, sizes, colors };
   }
 
-  // Recolour regions smaller than minSize to the colour they share the longest border with.
-  function mergeSmall(labels, w, h, k, minSize) {
+  // Recolour the given regions to the colour each shares the longest border with. Returns true if any changed.
+  function recolorRegions(labels, w, h, k, map, sizes, targets) {
     const n = w * h;
     const nb = new Int32Array(k);
+    // bucket pixels by region
+    const start = new Int32Array(sizes.length + 1);
+    for (let r = 0; r < sizes.length; r++) start[r + 1] = start[r] + sizes[r];
+    const fill = start.slice(0, sizes.length);
+    const pix = new Int32Array(n);
+    for (let p = 0; p < n; p++) pix[fill[map[p]]++] = p;
+    let changed = false;
+    for (const r of targets) {
+      nb.fill(0);
+      const own = labels[pix[start[r]]];
+      for (let i = start[r]; i < start[r + 1]; i++) {
+        const p = pix[i], x = p % w;
+        if (x > 0 && map[p - 1] !== r) nb[labels[p - 1]]++;
+        if (x < w - 1 && map[p + 1] !== r) nb[labels[p + 1]]++;
+        if (p >= w && map[p - w] !== r) nb[labels[p - w]]++;
+        if (p < n - w && map[p + w] !== r) nb[labels[p + w]]++;
+      }
+      let best = -1, bestN = 0;
+      for (let c = 0; c < k; c++) if (c !== own && nb[c] > bestN) { bestN = nb[c]; best = c; }
+      if (best < 0) continue;
+      for (let i = start[r]; i < start[r + 1]; i++) labels[pix[i]] = best;
+      changed = true;
+    }
+    return changed;
+  }
+
+  // Recolour regions smaller than minSize pixels.
+  function mergeSmall(labels, w, h, k, minSize) {
     for (let pass = 0; pass < 30; pass++) {
       const { map, sizes } = components(labels, w, h);
       const small = [];
       for (let r = 0; r < sizes.length; r++) if (sizes[r] < minSize) small.push(r);
       if (!small.length || sizes.length === 1) return;
       small.sort((a, b) => sizes[a] - sizes[b]);
-      // bucket pixels by region
-      const start = new Int32Array(sizes.length + 1);
-      for (let r = 0; r < sizes.length; r++) start[r + 1] = start[r] + sizes[r];
-      const fill = start.slice(0, sizes.length);
-      const pix = new Int32Array(n);
-      for (let p = 0; p < n; p++) pix[fill[map[p]]++] = p;
-      let changed = false;
-      for (const r of small) {
-        nb.fill(0);
-        const own = labels[pix[start[r]]];
-        for (let i = start[r]; i < start[r + 1]; i++) {
-          const p = pix[i], x = p % w;
-          if (x > 0 && map[p - 1] !== r) nb[labels[p - 1]]++;
-          if (x < w - 1 && map[p + 1] !== r) nb[labels[p + 1]]++;
-          if (p >= w && map[p - w] !== r) nb[labels[p - w]]++;
-          if (p < n - w && map[p + w] !== r) nb[labels[p + w]]++;
-        }
-        let best = -1, bestN = 0;
-        for (let c = 0; c < k; c++) if (c !== own && nb[c] > bestN) { bestN = nb[c]; best = c; }
-        if (best < 0) continue;
-        for (let i = start[r]; i < start[r + 1]; i++) labels[pix[i]] = best;
-        changed = true;
-      }
-      if (!changed) return;
+      if (!recolorRegions(labels, w, h, k, map, sizes, small)) return;
+    }
+  }
+
+  // Recolour slivers: regions too narrow to hold a number (often the soft edge between two colours), which
+  // would otherwise show up as doubled outlines in large pictures.
+  function mergeThin(labels, w, h, k, minThickness) {
+    for (let pass = 0; pass < 6; pass++) {
+      const { map, sizes } = components(labels, w, h);
+      if (sizes.length === 1) return;
+      const spots = labelSpots(map, w, h, sizes.length);
+      const thin = [];
+      for (let r = 0; r < sizes.length; r++) if (spots[r].r < minThickness) thin.push(r);
+      if (!thin.length) return;
+      thin.sort((a, b) => sizes[a] - sizes[b]);
+      if (!recolorRegions(labels, w, h, k, map, sizes, thin)) return;
     }
   }
 
@@ -308,8 +328,12 @@
     labels = modeFilter(labels, w, h, k, opts.smoothing == null ? 2 : opts.smoothing);
 
     let minSize = Math.max(4, opts.minRegion || Math.round(n / 2500));
-    const maxRegions = opts.maxRegions || 1500;
+    const maxRegions = opts.maxRegions || 4000;
     mergeSmall(labels, w, h, k, minSize);
+    if (opts.minThickness) {
+      mergeThin(labels, w, h, k, opts.minThickness);
+      mergeSmall(labels, w, h, k, minSize);
+    }
     let comp = components(labels, w, h);
     while (comp.sizes.length > maxRegions && minSize < n) {
       minSize = Math.ceil(minSize * 1.5);
@@ -368,15 +392,34 @@
     return out;
   }
 
-  // Shared presets for the "detail" setting: longest side in pixels, smallest region as a fraction of the
-  // picture (pixels / minDiv), and smoothing passes.
-  const DETAIL = {
-    low: { side: 260, minDiv: 700, smoothing: 3 },
-    medium: { side: 380, minDiv: 1600, smoothing: 2 },
-    high: { side: 520, minDiv: 3500, smoothing: 2 },
-  };
+  // Pictures are painted at their native size, shrunk only to fit Full HD (1920x1080, either orientation).
+  const MAX_LONG = 1920, MAX_SHORT = 1080;
+  function fitSize(w, h) {
+    const s = Math.min(1, MAX_LONG / Math.max(w, h), MAX_SHORT / Math.min(w, h));
+    return { w: Math.max(8, Math.round(w * s)), h: Math.max(8, Math.round(h * s)) };
+  }
 
-  const api = { generate, encodeRLE, decodeRLE, components, DETAIL };
+  // "detail" presets: the smallest region is pixels / minDiv, so the number of regions stays about the same
+  // whatever the resolution; larger pictures just get smoother edges.
+  const DETAIL = {
+    low: { minDiv: 700, smoothing: 3 },
+    medium: { minDiv: 1600, smoothing: 2 },
+    high: { minDiv: 3500, smoothing: 2 },
+    max: { minDiv: 8000, smoothing: 1 },
+  };
+  function optionsFor(detail, w, h, colors) {
+    const d = DETAIL[detail] || DETAIL.medium;
+    const scale = Math.max(w, h) / 400; // the presets were tuned at about 400px
+    return {
+      colors,
+      blur: Math.max(1, Math.round(scale * 0.75)),
+      smoothing: d.smoothing + (scale > 2.5 ? 1 : 0),
+      minThickness: Math.max(1.5, scale * 0.7),
+      minRegion: Math.max(4, Math.round(w * h / d.minDiv)),
+    };
+  }
+
+  const api = { generate, encodeRLE, decodeRLE, components, DETAIL, fitSize, optionsFor, MAX_LONG, MAX_SHORT };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.PBN = api;
 })(typeof self !== 'undefined' ? self : this);

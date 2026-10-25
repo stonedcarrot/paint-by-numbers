@@ -1,5 +1,20 @@
-# Caddy gets and renews a free HTTPS certificate for $DOMAIN automatically.
+# Caddy gets and renews a free Let's Encrypt HTTPS certificate for $DOMAIN automatically.
 {$DOMAIN} {
 	encode zstd gzip
+
+	# The admin page is never served to the internet. Reach it through an SSH tunnel instead
+	# (see DEPLOY.md, "Using the admin page"). Delete these two lines to expose it publicly.
+	@admin path /admin /admin/ /admin.html /admin.js /api/admin /api/admin/*
+	respond @admin 404
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
 	reverse_proxy paint-together:3000
 }

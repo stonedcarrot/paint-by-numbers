@@ -32,10 +32,35 @@ function startServer() {
     }));
   }
   const p = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-    env: { ...process.env, PORT, DATA_DIR: DATA }, stdio: ['ignore', 'pipe', 'inherit'] });
+    env: { ...process.env, PORT, DATA_DIR: DATA, UPLOAD_QUOTA_MB: '2', ADMIN_TOKEN }, stdio: ['ignore', 'pipe', 'inherit'] });
   return new Promise((resolve) => p.stdout.on('data', (d) => { if (/running/.test(d)) resolve(p); }));
 }
 const step = (s) => console.log('•', s);
+// the spawned server gets a 2 MB storage limit and this admin token; for E2E_URL set them on the server yourself
+const ADMIN_TOKEN = process.env.E2E_ADMIN_TOKEN || 'test-admin-token';
+
+// a busy 2400x1600 picture (bigger than Full HD) as PNG bytes
+async function makeBigImage(page) {
+  const b64 = await page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 2400; c.height = 1600;
+    const x = c.getContext('2d');
+    const g = x.createLinearGradient(0, 0, 2400, 1600);
+    g.addColorStop(0, '#fbd38d'); g.addColorStop(0.5, '#f56565'); g.addColorStop(1, '#553c9a');
+    x.fillStyle = g; x.fillRect(0, 0, 2400, 1600);
+    let seed = 7;
+    const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const cols = ['#2b6cb0', '#38a169', '#ecc94b', '#ffffff', '#1a202c', '#ed64a6', '#4fd1c5'];
+    for (let i = 0; i < 260; i++) {
+      x.fillStyle = cols[i % cols.length];
+      x.beginPath();
+      x.ellipse(rnd() * 2400, rnd() * 1600, 20 + rnd() * 160, 20 + rnd() * 120, rnd() * 3, 0, 7);
+      x.fill();
+    }
+    return c.toDataURL('image/png').split(',')[1];
+  });
+  return Buffer.from(b64, 'base64');
+}
 
 // draw a little landscape and return it as PNG bytes
 async function makeImage(page) {
@@ -63,6 +88,9 @@ async function newPlayer(browser, name, url = BASE) {
   await ctx.grantPermissions(['clipboard-read', 'clipboard-write']);
   const page = await ctx.newPage();
   page.on('pageerror', (e) => { console.error(`[${name}] page error:`, e); process.exitCode = 1; });
+  page.on('console', (m) => {
+    if (/Content Security Policy/i.test(m.text())) { console.error(`[${name}] CSP violation:`, m.text()); process.exitCode = 1; }
+  });
   await page.goto(BASE);
   await page.waitForFunction(() => window.__pt && window.__pt.state.user);
   await page.fill('#nameInput', name);
@@ -98,6 +126,7 @@ const paintedCount = (page) => page.evaluate(() => window.__pt.state.board.paint
     await alice.setInputFiles('#fileInput', { name: 'farm-house.png', mimeType: 'image/png', buffer: png });
     await alice.waitForSelector('#createRoomBtn:not([disabled])', { timeout: 30000 });
     assert.match(await alice.textContent('#genStats'), /\d+ regions/);
+    assert.match(await alice.textContent('#genStats'), /640×480/, 'smaller pictures keep their native size');
     await alice.screenshot({ path: path.join(SHOTS, '1-create.png') });
     await alice.click('#createRoomBtn');
     await alice.waitForURL(/\/r\/[A-Z2-9]{6}$/);
@@ -258,6 +287,87 @@ const paintedCount = (page) => page.evaluate(() => window.__pt.state.board.paint
     await f3.goBack();
     await f3.waitForSelector('#home:not(.hidden)');
     await Promise.all([f1, f2, f3].map((p) => p.context().close()));
+
+    step('Full HD: a 2400x1600 upload is reduced to fit 1920x1080');
+    const q = await newPlayer(browser, 'Quinn');
+    await q.waitForSelector('#storageBox .sub');
+    assert.match(await q.textContent('#storageBox'), /0 KB of 2\.0 MB/);
+    const big = await makeBigImage(q);
+    await q.setInputFiles('#fileInput', { name: 'big.png', mimeType: 'image/png', buffer: big });
+    await q.waitForFunction(() => /1620×1080/.test(document.querySelector('#genStats').textContent), null, { timeout: 60000 });
+    await q.selectOption('#detailInput', 'max');
+    await q.waitForFunction(() => /1620×1080/.test(document.querySelector('#genStats').textContent) &&
+      document.querySelector('#previewBusy').classList.contains('hidden'), null, { timeout: 60000 });
+    await q.screenshot({ path: path.join(SHOTS, '8-fhd-create.png') });
+    const bigBytes = await q.evaluate(() => /· ([\d.]+ [KM]B)/.exec(document.querySelector('#genStats').textContent)[1]);
+    step(`  Full HD picture needs ${bigBytes}`);
+
+    step('storage: admin page is locked without the token');
+    const adm = await (await browser.newContext()).newPage();
+    await adm.goto(BASE + '/admin');
+    await adm.fill('#token', 'wrong');
+    await adm.press('#token', 'Enter');
+    await adm.waitForSelector('#msg:has-text("Wrong admin token")', { timeout: 5000 });
+
+    step('storage: with the limit set to 0 MB the Start button is disabled');
+    await adm.fill('#token', ADMIN_TOKEN);
+    await adm.press('#token', 'Enter');
+    await adm.waitForSelector('#users tr:has-text("Quinn")');
+    await adm.fill('#users tr:has-text("Quinn") input', '0');
+    await adm.click('#users tr:has-text("Quinn") button:has-text("Set limit")');
+    await q.waitForSelector('#createRoomBtn[disabled]');
+    assert.match(await q.textContent('#genStats'), /Not enough space/);
+
+    step('storage: player requests more, admin approves, player creates the Full HD picture');
+    await q.click('#createBack');
+    await q.click('#moreSpaceBtn');
+    await q.fill('#storageBox input', '50');
+    await q.fill('#storageBox textarea', 'I paint big pictures');
+    await q.click('#storageBox button:has-text("Send request")');
+    await q.waitForSelector('#storageBox:has-text("You asked for 50 MB")');
+    await adm.reload();
+    await adm.waitForSelector('#requests tr:has-text("I paint big pictures")');
+    await adm.screenshot({ path: path.join(SHOTS, '9-admin.png'), fullPage: true });
+    await adm.click('#requests tr:has-text("Quinn") button:has-text("Set limit")');
+    await q.waitForSelector('.toast:has-text("storage is now 50 MB")');
+    assert.match(await q.textContent('#storageBox'), /of 50 MB/);
+    await q.setInputFiles('#fileInput', { name: 'big.png', mimeType: 'image/png', buffer: big });
+    await q.waitForSelector('#createRoomBtn:not([disabled])', { timeout: 60000 });
+    await q.click('#createRoomBtn');
+    await q.waitForSelector('#game:not(.hidden)');
+    const dims = await q.evaluate(() => [window.__pt.state.board.w, window.__pt.state.board.h]);
+    assert.deepEqual(dims, [1620, 1080]);
+
+    step('Full HD: painting updates stay fast');
+    const timing = await q.evaluate(() => {
+      const { state } = window.__pt;
+      const b = state.board;
+      const times = [];
+      window.__pt.selectColor(0);
+      b.render();
+      const todo = b.p.regions.map((g, i) => i).filter((i) => b.p.regions[i].c === 0 && !b.painted[i]).slice(0, 40);
+      for (const r of todo) {
+        b.paint(r);
+        const t = performance.now();
+        b.render();
+        times.push(performance.now() - t);
+      }
+      times.sort((x, y) => x - y);
+      const t0 = performance.now();
+      b.fullDirty = true; b.render();
+      return { median: times[times.length >> 1], full: performance.now() - t0, regions: b.n };
+    });
+    step(`  ${timing.regions} regions; one paint redraws in ${timing.median.toFixed(1)} ms (full redraw ${timing.full.toFixed(0)} ms)`);
+    assert.ok(timing.median < timing.full, 'a paint redraws less than the whole picture');
+    await q.screenshot({ path: path.join(SHOTS, '10-fhd-game.png') });
+
+    step('storage: deleting the picture frees the space');
+    await q.click('#gameBack');
+    await q.waitForSelector('#storageBox .sub:not(:has-text("0 KB of"))');
+    q.once('dialog', (d) => d.accept());
+    await q.click('#recentList li:has-text("big") button[title="Delete this picture"]');
+    await q.waitForSelector('#storageBox .sub:has-text("0 KB of 50 MB")');
+    await Promise.all([q, adm].map((p) => p.context().close()));
 
     step('mobile layout renders');
     await Promise.all([bob, ...others.slice(0, 8)].map((p) => p.context().close()));

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Paint Together admin</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <section class="screen">
+    <header class="topbar">
+      <div class="brand"><span class="logo">🎨</span> Paint Together admin</div>
+      <button class="btn ghost hidden" id="signOut">Sign out</button>
+    </header>
+    <main class="admin">
+      <form class="card row hidden" id="login">
+        <input id="token" type="password" placeholder="Admin token (ADMIN_TOKEN)" autocomplete="current-password">
+        <button class="btn primary">Sign in</button>
+      </form>
+      <p class="stats" id="msg"></p>
+      <div id="panel" class="hidden">
+        <h2>Storage requests</h2>
+        <div class="card"><table class="admin-table" id="requests"></table></div>
+        <h2>All players</h2>
+        <div class="card"><table class="admin-table" id="users"></table></div>
+      </div>
+    </main>
+  </section>
+  <div id="toasts"></div>
+  <script src="/admin.js"></script>
+</body>
+</html>

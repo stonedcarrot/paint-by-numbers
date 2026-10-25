@@ -214,3 +214,20 @@ input[type=range] { accent-color: var(--accent); padding: 0; border: 0; }
   #copyLinkBtn { padding: 8px 10px; }
   .name-field input { width: 110px; }
 }
+
+/* storage */
+.storage { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.storage .bar { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; margin: 6px 0; }
+.storage .bar div { height: 100%; background: var(--ok); }
+.storage .bar.full div { background: var(--accent); }
+.storage form { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.storage textarea { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; resize: vertical; }
+
+/* admin */
+.admin { max-width: 1080px; width: 100%; margin: 0 auto; padding: 18px; }
+.admin h2 { margin: 18px 0 8px; }
+.admin .card { overflow-x: auto; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.admin-table th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px 8px; }
+.admin-table td { padding: 8px; border-top: 1px solid var(--line); vertical-align: middle; }
+.row > .mb-input { flex: 0 0 90px; width: 90px; }

@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const sharp = require('sharp');
 const PBN = require('./public/pbn.js');
 
-const GENERATOR_VERSION = 1;
+const GENERATOR_VERSION = 2;
 const IMAGE_EXT = /\.(png|jpe?g|webp|svg|gif)$/i;
 
 function createFeatured({ dir, cacheDir }) {
@@ -79,21 +79,21 @@ function createFeatured({ dir, cacheDir }) {
     const bytes = fs.readFileSync(p.file);
     const key = crypto.createHash('sha1').update(bytes)
       .update(JSON.stringify([GENERATOR_VERSION, p.colors, p.detail])).digest('hex').slice(0, 16);
-    const cacheFile = path.join(cacheDir, `${p.id}-${key}.json`);
-    try { return JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch { /* not cached yet */ }
+    const ref = `${p.id}-${key}.json`;
+    const cacheFile = path.join(cacheDir, ref);
+    try { return { ref, puzzle: loadRef(ref) }; } catch { /* not cached yet */ }
 
-    const d = PBN.DETAIL[p.detail];
+    const meta = await sharp(bytes, { density: 144 }).metadata();
+    const fit = PBN.fitSize(meta.width, meta.height);
     const { data, info } = await sharp(bytes, { density: 144 })
-      .resize(d.side, d.side, { fit: 'inside' })
+      .resize(fit.w, fit.h, { fit: 'fill' })
       .flatten({ background: '#ffffff' })
       .ensureAlpha()
       .raw()
       .toBuffer({ resolveWithObject: true });
-    const g = PBN.generate({ data, width: info.width, height: info.height }, {
-      colors: p.colors, smoothing: d.smoothing,
-      minRegion: Math.max(4, Math.round(info.width * info.height / d.minDiv)),
-    });
-    const jpeg = await sharp(bytes, { density: 144 }).resize(480, 480, { fit: 'inside' })
+    const g = PBN.generate({ data, width: info.width, height: info.height },
+      PBN.optionsFor(p.detail, info.width, info.height, p.colors));
+    const jpeg = await sharp(bytes, { density: 144 }).resize(960, 960, { fit: 'inside' })
       .flatten({ background: '#ffffff' }).jpeg({ quality: 78 }).toBuffer();
     const puzzle = {
       w: g.w, h: g.h, palette: g.palette,
@@ -102,7 +102,17 @@ function createFeatured({ dir, cacheDir }) {
       preview: 'data:image/jpeg;base64,' + jpeg.toString('base64'),
     };
     fs.writeFileSync(cacheFile, JSON.stringify(puzzle));
-    return puzzle;
+    loaded.set(ref, puzzle);
+    return { ref, puzzle };
+  }
+
+  // Rooms of featured pictures point at the cached puzzle instead of storing their own copy.
+  // Don't delete featured-cache files while rooms still use them.
+  const loaded = new Map();
+  function loadRef(ref) {
+    if (!/^[a-z0-9-]+-[0-9a-f]{16}\.json$/.test(ref)) throw new Error('bad puzzle ref');
+    if (!loaded.has(ref)) loaded.set(ref, JSON.parse(fs.readFileSync(path.join(cacheDir, ref), 'utf8')));
+    return loaded.get(ref);
   }
 
   function puzzleFor(p) {
@@ -119,7 +129,7 @@ function createFeatured({ dir, cacheDir }) {
     for (const p of list()) await puzzleFor(p).catch(() => {});
   }
 
-  return { list, get, pictureOfDay, puzzleFor, warm, dir };
+  return { list, get, pictureOfDay, puzzleFor, loadRef, warm, dir };
 }
 
 module.exports = { createFeatured };

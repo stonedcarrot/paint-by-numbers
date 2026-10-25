@@ -52,8 +52,9 @@ The artist credit stays visible while painting (click their name) and on the fin
 ### Your own pictures
 
 1. Enter your name, then **Choose an image**. Pick the number of colours and the level of detail and preview the
-   numbered outline, the finished look, or the original.
-2. **Create & get invite link**, then share the link (or its 6-letter code) with up to 9 friends.
+   numbered outline, the finished look, or the original. Pictures are painted at their own size up to Full HD
+   (1920×1080, either orientation); bigger images are scaled down to fit and smaller ones keep their native size.
+2. **Start painting**, then share the invite link (or its 6-letter code) with up to 9 friends if you want company.
 3. Pick a colour at the bottom; regions with that number are shaded grey. Tap/click a region to fill it. Wrong
    colours aren't accepted and the right colour swatch wiggles.
 4. Everyone sees fills, live cursors and chat instantly. When the last region is filled, everyone gets the finished
@@ -61,6 +62,25 @@ The artist credit stays visible while painting (click their name) and on the fin
 
 Controls: drag to pan, scroll or pinch to zoom, `+` / `-` / `0` to zoom or fit, `[` / `]` (or arrow keys) to switch colour.
 The 👁 button peeks at the original image.
+
+### Picture storage and the admin page
+
+The server keeps every uploaded picture so other players can open it (it isn't peer-to-peer). What's stored is the
+converted puzzle plus a small preview, not your original file, so a Full HD picture usually takes well under 1 MB.
+Each player gets **100 MB** for pictures they upload (set `UPLOAD_QUOTA_MB` to change the default). Usage is shown
+under **Your pictures** on the home page, where players can delete their own pictures to free space or click
+**Request more space** to ask for a higher limit with a short note. Featured pictures don't count.
+
+Requests go to the admin page at `/admin`. In the public HTTPS setup (`deploy/`) that page is blocked on the public
+domain and opened through an SSH tunnel instead; see [deploy/AWS-EC2-SECURE.md](deploy/AWS-EC2-SECURE.md#9-using-the-admin-page). Turn it on by setting the `ADMIN_TOKEN` environment variable to a long
+random password (for example from `openssl rand -hex 24`), then sign in with it. The page lists waiting requests
+(**Set limit** to approve with any amount, or **Decline**) and every player's usage, so you can change anyone's
+limit. Players get a message as soon as their request is handled.
+
+```bash
+docker run -d --name paint-together -p 3000:3000 -v paint-data:/data \
+  -e ADMIN_TOKEN=your-long-random-password -e UPLOAD_QUOTA_MB=100 paint-together
+```
 
 ### Featuring artists
 
@@ -102,6 +122,9 @@ picture isn't full), or **Invite** them to yours. Your identity is kept in your 
 browser to keep your friends and pictures.
 
 ## How it works
+
+Large pictures stay smooth to paint: each fill redraws only the area around that region instead of the whole
+picture.
 
 - `public/pbn.js`: the image → paint-by-numbers converter (blur, k-means colour clustering in Lab space, mode-filter
   smoothing, connected regions, merging tiny regions, and a distance transform to place each number at the most
