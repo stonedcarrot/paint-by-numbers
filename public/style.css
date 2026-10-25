@@ -171,10 +171,18 @@ input[type=range] { accent-color: var(--accent); padding: 0; border: 0; }
 #chatLog b { margin-right: 4px; }
 #chatLog .sys { color: var(--muted); font-style: italic; }
 
-.palette {
-  display: flex; gap: 6px; padding: 8px 10px; background: var(--card); border-top: 1px solid var(--line);
-  overflow-x: auto; scrollbar-width: thin; flex: none;
-}
+.palette-bar { display: flex; align-items: center; background: var(--card); border-top: 1px solid var(--line); flex: none; min-width: 0; }
+.palette { display: flex; gap: 6px; padding: 8px 10px; overflow-x: auto; scrollbar-width: thin; flex: 1; min-width: 0; }
+.tools { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border-right: 1px solid var(--line); flex: none; align-items: stretch; }
+.tools .btn:disabled { opacity: .35; }
+.tools .btn.active:disabled { opacity: .8; }
+.tools select { padding: 3px 6px; font-size: 13px; border-radius: 8px; }
+.tools .lock { font-size: 11px; color: var(--muted); text-align: center; white-space: nowrap; }
+.viewport.brushing { cursor: cell; }
+.settings-form { display: flex; flex-direction: column; gap: 12px; }
+.settings-form label { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+.settings-form label:not(.radio) { flex-direction: column; font-weight: 600; }
+.settings-form .radio input { margin-top: 3px; }
 .swatch {
   flex: none; width: 54px; height: 60px; border-radius: 12px; border: 3px solid transparent; cursor: pointer;
   display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative;
@@ -211,6 +219,8 @@ input[type=range] { accent-color: var(--accent); padding: 0; border: 0; }
   #previewCanvas { max-height: 55vh; }
   .drawer { position: absolute; right: 0; top: 0; bottom: 0; width: min(320px, 90vw); z-index: 5; box-shadow: var(--shadow); }
   .players { display: none; }
+  .tools { padding: 6px; }
+  .tools .btn.small { padding: 4px 6px; }
   #copyLinkBtn { padding: 8px 10px; }
   .name-field input { width: 110px; }
 }

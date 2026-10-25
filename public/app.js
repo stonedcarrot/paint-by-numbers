@@ -29,6 +29,9 @@
     players: [],
     scores: [],
     pendingRoute: null,
+    settings: null, // the room's tool settings, chosen by its host
+    tool: 'fill', // this player's own choice when the room isn't locked
+    size: 4,
   };
 
   // ---------- toasts ----------
@@ -116,6 +119,20 @@
       if (!state.board) return;
       state.board.paint(m.region);
       afterPaintChange();
+    },
+    brush(m) {
+      if (!state.board) return;
+      if (state.board.brush(m.color, m.size, m.pts)) queueRender();
+    },
+    settings(m) {
+      const before = state.settings;
+      state.settings = m.settings;
+      if (m.by && !state.me?.host && (before.tool !== m.settings.tool || before.locked !== m.settings.locked || before.size !== m.settings.size)) {
+        const tool = m.settings.tool === 'brush' ? `the pixel brush (${m.settings.size} px)` : 'the fill bucket';
+        toast(m.settings.locked ? `${m.by} set this picture to ${tool}.` : `${m.by} lets everyone choose their own tool now.`, null, 5000);
+      }
+      if (m.settings.locked || !before || before.locked) { state.tool = m.settings.tool; state.size = m.settings.size; }
+      updateTools();
     },
     wrong(m) {
       if (!state.board) return;
@@ -527,7 +544,32 @@
       this.segRow[h] = segs.length / 5;
       this.segs = Int32Array.from(segs);
       this.numberCap = Math.max(64, Math.max(w, h) * this.S / 45);
+      this.brushed = new Uint8Array(w * h); // pixels coloured with the pixel brush
       this.dirty = new Set();
+      this.dirtyRects = [];
+      this.fullDirty = true;
+    }
+    // colour the pixels under a brush stroke that belong to unpainted regions of this colour
+    brush(color, size, pts) {
+      const { w, map, brushed, painted, img } = this;
+      const regions = this.p.regions, c = this.rgb[color], d = img.data;
+      let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1, n = 0;
+      PBN.brushStroke(this.w, this.h, pts, size, (i) => {
+        if (brushed[i]) return;
+        const r = map[i];
+        if (regions[r].c !== color || painted[r]) return;
+        brushed[i] = 1;
+        n++;
+        const o = i * 4;
+        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
+        const x = i % w, y = (i / w) | 0;
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      });
+      if (n) this.dirtyRects.push([x0, y0, x1 + 1, y1 + 1]);
+      return n;
+    }
+    setBrushed(runs) {
+      this.brushed = PBN.fromRuns(runs, this.w * this.h);
       this.fullDirty = true;
     }
     touch(r) { if (r >= 0 && r < this.n) this.dirty.add(r); }
@@ -563,21 +605,23 @@
       return this.p.regions[r].c === this.highlight ? HIGHLIGHT : WHITE;
     }
     setPixels(r) {
-      const d = this.img.data, c = this.colorOf(r);
+      const d = this.img.data, c = this.colorOf(r), brushed = this.brushed;
+      const own = this.painted[r] || r === this.flash ? null : this.rgb[this.p.regions[r].c];
       for (let i = this.pixStart[r]; i < this.pixStart[r + 1]; i++) {
-        const o = this.pix[i] * 4;
-        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
+        const px = this.pix[i], o = px * 4, k = own && brushed[px] ? own : c;
+        d[o] = k[0]; d[o + 1] = k[1]; d[o + 2] = k[2]; d[o + 3] = 255;
       }
     }
     // draw everything that changed since the last call
     render() {
-      if (this.fullDirty || this.dirty.size > 12) {
+      if (this.fullDirty || this.dirty.size > 12 || this.dirtyRects.length > 40) {
         for (let r = 0; r < this.n; r++) this.setPixels(r);
         this.cctx.putImageData(this.img, 0, 0);
         this.drawArea(0, 0, this.w, this.h);
       } else {
         // one box per changed region (plus a margin for numbers that spill over), merged where they overlap
-        let rects = [];
+        let rects = this.dirtyRects.map(([x0, y0, x1, y1]) => [Math.max(0, x0 - 3), Math.max(0, y0 - 3),
+          Math.min(this.w, x1 + 3), Math.min(this.h, y1 + 3)]);
         for (const r of this.dirty) {
           this.setPixels(r);
           const b = r * 4, m = 3;
@@ -593,6 +637,7 @@
         }
       }
       this.dirty.clear();
+      this.dirtyRects = [];
       this.fullDirty = false;
     }
     // redraw puzzle pixels [x0,x1) x [y0,y1)
@@ -676,6 +721,13 @@
     state.me = you;
     state.board = new Board({ ...puzzle, map }, canvas);
     room.paintedBy.forEach((by, r) => { if (by) state.board.paint(r); });
+    state.board.setBrushed(room.brushRuns);
+    state.settings = room.settings;
+    state.tool = room.settings.tool;
+    state.size = room.settings.size;
+    $('#settingsBtn').classList.toggle('hidden', !you.host);
+    $('#settingsDrawer').classList.add('hidden');
+    updateTools();
     if (location.pathname !== '/r/' + room.id) {
       // arriving from home (e.g. a featured picture) gets its own history entry so Back returns home
       history[/^\/r\//.test(location.pathname) ? 'replaceState' : 'pushState']({}, '', '/r/' + room.id);
@@ -763,6 +815,50 @@
     queueRender();
   }
 
+  // ---------- tools: fill bucket or pixel brush ----------
+  const locked = () => state.settings && state.settings.locked;
+  const activeTool = () => (locked() ? state.settings.tool : state.tool);
+  const activeSize = () => (locked() ? state.settings.size : state.size);
+  for (const sel of [$('#brushSize'), $('#settingsForm [name=size]')]) {
+    for (const n of PBN.BRUSH_SIZES) sel.append(el('option', { value: n }, n === 1 ? '1 pixel' : `${n} px`));
+  }
+  function updateTools() {
+    if (!state.settings) return;
+    const tool = activeTool();
+    for (const b of $$('#tools [data-tool]')) {
+      b.classList.toggle('active', b.dataset.tool === tool);
+      b.disabled = locked();
+    }
+    $('#brushSize').value = activeSize();
+    $('#brushSize').disabled = locked();
+    $('#brushSize').classList.toggle('hidden', tool !== 'brush');
+    $('#toolLock').classList.toggle('hidden', !locked());
+    $('#toolLock').textContent = state.me?.host ? '🔒 Locked (⚙️ to change)' : "🔒 Host's choice";
+    viewport.classList.toggle('brushing', tool === 'brush');
+    const f = $('#settingsForm');
+    f.tool.value = state.settings.tool;
+    f.size.value = state.settings.size;
+    f.locked.checked = state.settings.locked;
+  }
+  function setTool(tool) {
+    if (locked() || !state.board) return;
+    if (tool === 'brush' && state.tool !== 'brush' && !store.get('brushHint')) {
+      toast('Drag to colour pixels. Only pixels with the selected number take the colour. Move the picture with two fingers or a right-click drag.', null, 7000);
+      store.set('brushHint', true);
+    }
+    state.tool = tool;
+    updateTools();
+  }
+  for (const b of $$('#tools [data-tool]')) b.addEventListener('click', () => setTool(b.dataset.tool));
+  $('#brushSize').addEventListener('change', (e) => { state.size = Number(e.target.value); updateTools(); });
+  $('#settingsForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const f = e.target;
+    send({ type: 'roomSettings', settings: { tool: f.tool.value, size: Number(f.size.value), locked: f.locked.checked } });
+    toggleDrawer('#settingsDrawer');
+    toast('Room settings saved');
+  });
+
   function renderPlayers() {
     const list = $('#playersList');
     list.textContent = '';
@@ -849,8 +945,10 @@
     if (pointers.size === 1) {
       const p = localPoint(e);
       gesture = { start: p, last: p, moved: e.button !== 0, pinch: null };
+      if (e.button === 0 && activeTool() === 'brush' && !state.room.completedAt) startStroke(p);
     } else if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
+      endStroke();
       gesture.moved = true;
       gesture.pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y), mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } };
     }
@@ -871,6 +969,7 @@
       gesture.pinch = { dist, mid };
       return;
     }
+    if (stroke) { strokeTo(p); gesture.last = p; return; }
     if (!gesture.moved && Math.hypot(p.x - gesture.start.x, p.y - gesture.start.y) > 6) gesture.moved = true;
     if (gesture.moved) {
       viewport.classList.add('panning');
@@ -886,7 +985,8 @@
     pointers.delete(e.pointerId);
     if (pointers.size === 0 && gesture) {
       viewport.classList.remove('panning');
-      if (!gesture.moved && e.type === 'pointerup') tapAt(localPoint(e));
+      if (stroke) endStroke();
+      else if (!gesture.moved && e.type === 'pointerup' && activeTool() === 'fill') tapAt(localPoint(e));
       gesture = null;
     } else if (pointers.size === 1 && gesture) {
       gesture.pinch = null;
@@ -898,32 +998,81 @@
   viewport.addEventListener('contextmenu', (e) => e.preventDefault());
 
   let flashTimer = null;
+  function wrongColour(r) {
+    const b = state.board;
+    b.setFlash(r);
+    queueRender();
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => { b.setFlash(-1); queueRender(); }, 350);
+    const sw = $(`.swatch[data-c="${b.p.regions[r].c}"]`);
+    if (sw) { sw.classList.remove('shake'); void sw.offsetWidth; sw.classList.add('shake'); }
+  }
   function tapAt(p) {
     const b = state.board;
     const q = toPuzzle(p.x, p.y);
     const r = b.regionAt(q.x, q.y);
     if (r < 0 || b.painted[r]) return;
     const want = b.p.regions[r].c;
-    if (want !== state.selected) {
-      b.setFlash(r);
-      queueRender();
-      clearTimeout(flashTimer);
-      flashTimer = setTimeout(() => { b.setFlash(-1); queueRender(); }, 350);
-      const sw = $(`.swatch[data-c="${want}"]`);
-      if (sw) { sw.classList.remove('shake'); void sw.offsetWidth; sw.classList.add('shake'); }
-      return;
-    }
+    if (want !== state.selected) return wrongColour(r);
     b.paint(r);
     send({ type: 'paint', region: r, color: want });
     afterPaintChange();
   }
 
-  // keyboard: number keys pick colours, +/- zoom, 0 fit
+  // pixel brush strokes: coloured here straight away, sent to the server in short pieces
+  let stroke = null;
+  const round2 = (v) => Math.round(v * 100) / 100;
+  function startStroke(p) {
+    const q = toPuzzle(p.x, p.y);
+    const pt = [round2(q.x), round2(q.y)];
+    stroke = { color: state.selected, size: activeSize(), last: pt, pending: [...pt], painted: 0,
+      startRegion: state.board.regionAt(q.x, q.y), timer: null };
+    stroke.painted += state.board.brush(stroke.color, stroke.size, pt);
+    queueRender();
+    scheduleFlush();
+  }
+  function strokeTo(p) {
+    const q = toPuzzle(p.x, p.y);
+    const pt = [round2(q.x), round2(q.y)];
+    if (Math.hypot(pt[0] - stroke.last[0], pt[1] - stroke.last[1]) < 0.3) return;
+    stroke.painted += state.board.brush(stroke.color, stroke.size, [...stroke.last, ...pt]);
+    stroke.last = pt;
+    stroke.pending.push(...pt);
+    if (stroke.pending.length >= PBN.MAX_STROKE_POINTS * 2) flushStroke();
+    queueRender();
+    scheduleFlush();
+  }
+  function scheduleFlush() { if (!stroke.timer) stroke.timer = setTimeout(flushStroke, 40); }
+  function flushStroke() {
+    if (!stroke) return;
+    clearTimeout(stroke.timer);
+    stroke.timer = null;
+    if (stroke.pending.length && !(stroke.sent && stroke.pending.length === 2)) {
+      send({ type: 'brush', color: stroke.color, size: stroke.size, pts: stroke.pending });
+      stroke.sent = true;
+    }
+    stroke.pending = [];
+    // the next piece starts where this one ended so the line stays joined (already coloured, so no double work)
+    if (stroke.ended) stroke = null; else stroke.pending = [...stroke.last];
+  }
+  function endStroke() {
+    if (!stroke) return;
+    const s = stroke, b = state.board;
+    if (!s.painted && s.startRegion >= 0 && !b.painted[s.startRegion] && b.p.regions[s.startRegion].c !== s.color) wrongColour(s.startRegion);
+    if (s.sent && s.pending.length === 2) s.pending = []; // nothing new since the last piece
+    s.ended = true;
+    flushStroke();
+    stroke = null;
+  }
+
+  // keyboard: number keys pick colours, +/- zoom, 0 fit, B brush, F fill
   window.addEventListener('keydown', (e) => {
     if (!state.board || e.target.matches('input, textarea')) return;
     if (e.key === '+' || e.key === '=') centerZoom(1.3);
     else if (e.key === '-') centerZoom(1 / 1.3);
     else if (e.key === '0') fitView();
+    else if (e.key === 'b' || e.key === 'B') setTool('brush');
+    else if (e.key === 'f' || e.key === 'F') setTool('fill');
     else if (e.key === 'ArrowRight' || e.key === ']') selectColor((state.selected + 1) % state.board.p.palette.length);
     else if (e.key === 'ArrowLeft' || e.key === '[') selectColor((state.selected - 1 + state.board.p.palette.length) % state.board.p.palette.length);
   });
@@ -979,7 +1128,7 @@
     i.value = '';
   });
   function toggleDrawer(id) {
-    for (const d of ['#chatDrawer', '#friendsDrawer', '#artistDrawer']) {
+    for (const d of ['#chatDrawer', '#friendsDrawer', '#artistDrawer', '#settingsDrawer']) {
       if (d !== id) $(d).classList.add('hidden');
     }
     $(id).classList.toggle('hidden');
@@ -994,6 +1143,7 @@
     }
   }
   $('#chatBtn').addEventListener('click', () => toggleDrawer('#chatDrawer'));
+  $('#settingsBtn').addEventListener('click', () => { updateTools(); toggleDrawer('#settingsDrawer'); });
   $('#creditName').addEventListener('click', () => toggleDrawer('#artistDrawer'));
   $('#friendsBtn').addEventListener('click', () => toggleDrawer('#friendsDrawer'));
   $('#peekBtn').addEventListener('click', () => {
@@ -1011,5 +1161,5 @@
   connect();
 
   // exposed for automated tests
-  window.__pt = { state, view, toPuzzle, tapAt, selectColor };
+  window.__pt = { state, view, toPuzzle, tapAt, selectColor, setTool };
 })();

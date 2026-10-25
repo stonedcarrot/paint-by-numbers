@@ -62,6 +62,22 @@ The artist credit stays visible while painting (click their name) and on the fin
 Controls: drag to pan, scroll or pinch to zoom, `+` / `-` / `0` to zoom or fit, `[` / `]` (or arrow keys) to switch colour.
 The 👁 button peeks at the original image.
 
+### Fill bucket or pixel brush
+
+There are two painting tools, in the bottom-left corner of the game:
+
+- **🪣 Fill** (`F`): click a region to fill it in one go.
+- **🖌️ Brush** (`B`): drag to colour pixel by pixel, with a brush from 1 to 16 pixels across. Only pixels with the
+  selected number take the colour, so you can't paint over the lines, and a region counts as painted once every one
+  of its pixels is coloured. With the brush, move the picture with two fingers or a right-click (or middle-click)
+  drag.
+
+The person who created a picture is its host. The host's ⚙️ **Room settings** choose the tool and brush size for
+the picture and whether it's **locked for everyone**. When it's locked, every player has to use that tool and size,
+so nobody can race through a brush picture with the fill bucket; turn the lock off to let each player choose. New
+pictures start on the fill bucket, locked. Open-to-all featured pictures have no host, so everyone chooses there.
+Brushed pixels are saved with the picture and show up live for everyone.
+
 ### Picture storage and the admin page
 
 The server keeps every uploaded picture so other players can open it (it isn't peer-to-peer). What's stored is the

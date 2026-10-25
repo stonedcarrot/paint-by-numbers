@@ -142,13 +142,28 @@ function serializeRoom(room) {
   return { id: room.id, title: room.title, createdAt: room.createdAt, createdBy: room.createdBy,
     completedAt: room.completedAt || null, paintedBy: room.paintedBy,
     ...(room.puzzleRef ? { puzzleRef: room.puzzleRef } : { puzzle: room.puzzle }),
-    bytes: room.bytes || 0,
+    bytes: room.bytes || 0, settings: room.settings,
+    brushRuns: room.brushed ? PBN.toRuns(room.brushed) : (room.brushRuns || []),
     names: room.names, chat: room.chat, mode: room.mode || 'private', featuredId: room.featuredId || null,
     artist: room.artist || null };
 }
+// Which tool the room uses. Only the host (whoever made the picture) can change it; open-to-all featured
+// rooms have no host, so everyone picks their own tool there.
+const DEFAULT_SETTINGS = { tool: 'fill', size: 4, locked: true };
+function cleanSettings(s, fallback = DEFAULT_SETTINGS) {
+  s = s || {};
+  return {
+    tool: s.tool === 'brush' || s.tool === 'fill' ? s.tool : fallback.tool,
+    size: PBN.BRUSH_SIZES.includes(s.size) ? s.size : fallback.size,
+    locked: typeof s.locked === 'boolean' ? s.locked : fallback.locked,
+  };
+}
+const isHost = (room, user) => room.mode !== 'public' && room.createdBy === user.id;
+
 function hydrateRoom(data) {
   if (data.puzzleRef && !data.puzzle) data.puzzle = featured.loadRef(data.puzzleRef);
-  return { ...data, players: new Map(),
+  const settings = data.mode === 'public' ? { tool: 'fill', size: 4, locked: false } : cleanSettings(data.settings);
+  return { ...data, settings, players: new Map(),
     paintedCount: data.paintedBy.filter((x) => x !== null).length };
 }
 function getRoom(id) {
@@ -168,6 +183,44 @@ function deleteRoomData(room) {
   saveTimers.delete(file);
   fs.rm(file, { force: true }, () => {});
   rooms.delete(room.id);
+}
+
+// Brushed pixels live in memory as a 0/1 array per pixel, created the first time a room is brushed.
+function ensurePixels(room) {
+  if (room.brushed) return;
+  const { w, h, rle, regions } = room.puzzle;
+  room.regionMap = Uint16Array.from(PBN.decodeRLE(rle, w * h));
+  room.regionSize = new Int32Array(regions.length);
+  room.brushCount = new Int32Array(regions.length);
+  room.brushed = PBN.fromRuns(room.brushRuns, w * h);
+  for (let i = 0; i < room.regionMap.length; i++) {
+    const r = room.regionMap[i];
+    room.regionSize[r]++;
+    if (room.brushed[i]) room.brushCount[r]++;
+  }
+  delete room.brushRuns;
+}
+
+function markPainted(room, r, user) {
+  room.paintedBy[r] = user.id;
+  room.paintedCount++;
+  broadcast(room, { type: 'paint', region: r, by: user.id });
+}
+
+function afterPaint(room) {
+  if (room.paintedCount === room.paintedBy.length && !room.completedAt) {
+    room.completedAt = Date.now();
+    broadcast(room, { type: 'complete', completedAt: room.completedAt });
+  }
+  broadcast(room, playersPayload(room));
+  saveRoom(room);
+}
+
+// a player's tool must be the room's when the host has locked it
+function toolAllowed(room, ws, tool, size) {
+  const s = room.settings;
+  if (!s.locked || isHost(room, ws.user)) return tool === 'fill' || PBN.BRUSH_SIZES.includes(size);
+  return s.tool === tool && (tool === 'fill' || size === s.size);
 }
 
 // Deletes a picture for good: players inside are sent home and its owner gets the storage back.
@@ -280,8 +333,9 @@ function joinRoom(ws, roomId) {
   saveUsers();
   send(ws, { type: 'joined', room: { id: room.id, title: room.title, puzzle: room.puzzle,
     mode: room.mode || 'private', featuredId: room.featuredId || null, artist: room.artist || null,
-    paintedBy: room.paintedBy, completedAt: room.completedAt || null, chat: room.chat.slice(-50) },
-  you: { pid: ws.pid, color } });
+    paintedBy: room.paintedBy, completedAt: room.completedAt || null, chat: room.chat.slice(-50),
+    settings: room.settings, brushRuns: room.brushed ? PBN.toRuns(room.brushed) : (room.brushRuns || []) },
+  you: { pid: ws.pid, color, host: isHost(room, ws.user) } });
   broadcast(room, playersPayload(room));
   notifyRoomFriends(room);
 }
@@ -440,15 +494,40 @@ const handlers = {
     const r = m.region;
     if (!Number.isInteger(r) || r < 0 || r >= room.paintedBy.length) return;
     if (room.paintedBy[r] !== null) return;
-    if (room.puzzle.regions[r].c !== m.color) return send(ws, { type: 'wrong', region: r });
-    room.paintedBy[r] = ws.user.id;
-    room.paintedCount++;
-    broadcast(room, { type: 'paint', region: r, by: ws.user.id, pid: ws.pid });
-    if (room.paintedCount === room.paintedBy.length && !room.completedAt) {
-      room.completedAt = Date.now();
-      broadcast(room, { type: 'complete', completedAt: room.completedAt });
-    }
-    broadcast(room, playersPayload(room));
+    if (room.puzzle.regions[r].c !== m.color || !toolAllowed(room, ws, 'fill')) return send(ws, { type: 'wrong', region: r });
+    markPainted(room, r, ws.user);
+    afterPaint(room);
+  },
+
+  // pixel brush: colours only the pixels under the stroke whose number matches the colour
+  brush(ws, m) {
+    const room = ws.room;
+    if (!room || room.completedAt) return;
+    const { w, h, palette, regions } = room.puzzle;
+    const pts = m.pts, size = m.size, color = m.color;
+    if (!Number.isInteger(color) || color < 0 || color >= palette.length) return;
+    if (!Array.isArray(pts) || pts.length < 2 || pts.length % 2 || pts.length > PBN.MAX_STROKE_POINTS * 2) return;
+    if (!pts.every((v, k) => Number.isFinite(v) && v >= -16 && v <= (k % 2 ? h : w) + 16)) return;
+    if (!toolAllowed(room, ws, 'brush', size)) return send(ws, { type: 'settings', settings: room.settings });
+    ensurePixels(room);
+    const done = [];
+    PBN.brushStroke(w, h, pts, size, (i) => {
+      if (room.brushed[i]) return;
+      const r = room.regionMap[i];
+      if (regions[r].c !== color || room.paintedBy[r] !== null) return;
+      room.brushed[i] = 1;
+      if (++room.brushCount[r] === room.regionSize[r]) done.push(r);
+    });
+    broadcast(room, { type: 'brush', pid: ws.pid, color, size, pts }, ws);
+    for (const r of done) markPainted(room, r, ws.user);
+    if (done.length) afterPaint(room); else saveRoom(room);
+  },
+
+  roomSettings(ws, m) {
+    const room = ws.room;
+    if (!room || !isHost(room, ws.user)) return send(ws, { type: 'error', code: 'settings', message: 'Only the host can change the room settings.' });
+    room.settings = cleanSettings(m.settings, room.settings);
+    broadcast(room, { type: 'settings', settings: room.settings, by: ws.user.name });
     saveRoom(room);
   },
 

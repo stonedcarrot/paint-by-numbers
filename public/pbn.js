@@ -419,7 +419,61 @@
     };
   }
 
-  const api = { generate, encodeRLE, decodeRLE, components, DETAIL, fitSize, optionsFor, MAX_LONG, MAX_SHORT };
+  // ---- pixel brush: shared by the browser and the server so both colour exactly the same pixels ----
+  const BRUSH_SIZES = [1, 2, 4, 8, 16];
+  const MAX_STROKE_POINTS = 200; // x,y pairs per message
+
+  // Calls visit(i) for every pixel index under a stroke through pts [x0,y0,x1,y1,...] (puzzle pixels)
+  // with a round brush `size` pixels across. A pixel can be visited more than once.
+  function brushStroke(w, h, pts, size, visit) {
+    const r = size / 2;
+    const stamp = (cx, cy) => {
+      if (size <= 1) {
+        const x = Math.floor(cx), y = Math.floor(cy);
+        if (x >= 0 && y >= 0 && x < w && y < h) visit(y * w + x);
+        return;
+      }
+      const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(h - 1, Math.floor(cy + r));
+      const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(w - 1, Math.floor(cx + r));
+      for (let y = y0; y <= y1; y++) {
+        const dy = y + 0.5 - cy;
+        for (let x = x0; x <= x1; x++) {
+          const dx = x + 0.5 - cx;
+          if (dx * dx + dy * dy <= r * r) visit(y * w + x);
+        }
+      }
+    };
+    const step = Math.max(0.5, r * 0.5);
+    stamp(pts[0], pts[1]);
+    for (let k = 2; k + 1 < pts.length; k += 2) {
+      const ax = pts[k - 2], ay = pts[k - 1], bx = pts[k], by = pts[k + 1];
+      const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / step));
+      for (let s = 1; s <= n; s++) stamp(ax + (bx - ax) * s / n, ay + (by - ay) * s / n);
+    }
+  }
+
+  // set pixels of a 0/1 array as [start, length, start, length, ...] and back
+  function toRuns(bits) {
+    const out = [];
+    for (let i = 0; i < bits.length; i++) {
+      if (!bits[i]) continue;
+      const s = i;
+      while (i < bits.length && bits[i]) i++;
+      out.push(s, i - s);
+    }
+    return out;
+  }
+  function fromRuns(runs, n) {
+    const bits = new Uint8Array(n);
+    for (let k = 0; k + 1 < (runs || []).length; k += 2) {
+      const s = runs[k], len = runs[k + 1];
+      if (Number.isInteger(s) && Number.isInteger(len) && s >= 0 && len > 0 && s + len <= n) bits.fill(1, s, s + len);
+    }
+    return bits;
+  }
+
+  const api = { generate, encodeRLE, decodeRLE, components, DETAIL, fitSize, optionsFor, MAX_LONG, MAX_SHORT,
+    BRUSH_SIZES, MAX_STROKE_POINTS, brushStroke, toRuns, fromRuns };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.PBN = api;
 })(typeof self !== 'undefined' ? self : this);

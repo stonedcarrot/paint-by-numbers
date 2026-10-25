@@ -103,6 +103,7 @@
       <div class="players" id="playersList"></div>
       <div class="bar-actions">
         <button class="btn primary" id="copyLinkBtn">🔗 Invite link</button>
+        <button class="btn ghost icon hidden" id="settingsBtn" title="Room settings">⚙️</button>
         <button class="btn ghost icon" id="peekBtn" title="Peek at the original">👁</button>
         <button class="btn ghost icon" id="friendsBtn" title="Friends">👥<span class="badge hidden" id="friendsBadge"></span></button>
         <button class="btn ghost icon" id="chatBtn" title="Chat">💬<span class="badge hidden" id="chatBadge"></span></button>
@@ -128,12 +129,33 @@
         <h3>About the artist</h3>
         <div id="artistPanel"></div>
       </aside>
+      <aside class="drawer hidden" id="settingsDrawer">
+        <h3>Room settings</h3>
+        <form id="settingsForm" class="settings-form">
+          <p class="stats">You're the host, so you choose how this picture is painted.</p>
+          <label class="radio"><input type="radio" name="tool" value="fill"> <span><b>🪣 Fill bucket</b><br><span class="stats">Click a region to fill it in one go.</span></span></label>
+          <label class="radio"><input type="radio" name="tool" value="brush"> <span><b>🖌️ Pixel brush</b><br><span class="stats">Colour pixel by pixel. Slower, more like real painting.</span></span></label>
+          <label>Brush size <select name="size"></select></label>
+          <label class="radio"><input type="checkbox" name="locked"> <span><b>Lock for everyone</b><br><span class="stats">Players must use your tool and brush size. Turn off to let each player choose.</span></span></label>
+          <button class="btn primary">Save</button>
+        </form>
+      </aside>
       <aside class="drawer hidden" id="friendsDrawer">
         <h3>Friends</h3>
         <div class="friends-panel" data-friends data-ingame></div>
       </aside>
     </div>
-    <footer class="palette" id="palette"></footer>
+    <footer class="palette-bar">
+      <div class="tools" id="tools">
+        <div class="seg tool-seg">
+          <button class="btn small" data-tool="fill" title="Fill bucket (F): click a region to fill it">🪣 Fill</button>
+          <button class="btn small" data-tool="brush" title="Pixel brush (B): drag to colour pixels">🖌️ Brush</button>
+        </div>
+        <select id="brushSize" title="Brush size (pixels across)"></select>
+        <span class="lock hidden" id="toolLock" title="The host has set the tool for this picture">🔒 Host's choice</span>
+      </div>
+      <div class="palette" id="palette"></div>
+    </footer>
   </section>
 
   <div id="doneOverlay" class="overlay hidden">

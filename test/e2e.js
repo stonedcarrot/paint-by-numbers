@@ -115,6 +115,32 @@ async function paintRegionByClick(page, r) {
 }
 
 const paintedCount = (page) => page.evaluate(() => window.__pt.state.board.paintedCount);
+const brushedCount = (page) => page.evaluate(() => window.__pt.state.board.brushed.reduce((a, b) => a + b, 0));
+
+// screen position of a puzzle pixel
+const screenOf = (page, x, y) => page.evaluate(([x, y]) => {
+  const { state, view } = window.__pt;
+  const vr = document.querySelector('#viewport').getBoundingClientRect();
+  const S = state.board.S;
+  return { x: vr.left + view.tx + x * S * view.scale, y: vr.top + view.ty + y * S * view.scale };
+}, [x, y]);
+
+// drag the brush back and forth over a region's bounding box until it's covered
+async function brushRegion(page, r, step) {
+  const b = await page.evaluate((r) => {
+    const { state } = window.__pt;
+    window.__pt.selectColor(state.board.p.regions[r].c);
+    return Array.from(state.board.box.slice(r * 4, r * 4 + 4));
+  }, r);
+  for (let y = b[1] + 0.5; y <= b[3] + step; y += step) {
+    const a = await screenOf(page, b[0] - 1, Math.min(y, b[3] + 0.5));
+    const z = await screenOf(page, b[2] + 2, Math.min(y, b[3] + 0.5));
+    await page.mouse.move(a.x, a.y);
+    await page.mouse.down();
+    await page.mouse.move(z.x, z.y, { steps: 8 });
+    await page.mouse.up();
+  }
+}
 
 (async () => {
   let server = await startServer();
@@ -264,6 +290,8 @@ const paintedCount = (page) => page.evaluate(() => window.__pt.state.board.paint
     const shared = new URL(f1.url()).pathname;
     assert.equal(await f1.textContent('#gameTitle'), potdTitle);
     assert.equal(await f1.textContent('#modeChip'), 'Open to all');
+    assert.equal(await f1.isVisible('#settingsBtn'), false, 'open-to-all pictures have no host');
+    assert.equal(await f1.isVisible('#toolLock'), false, 'everyone picks their own tool in open-to-all pictures');
     const f2 = await newPlayer(browser, 'Gwen');
     await f2.waitForSelector('#potd [data-play=together]');
     await f2.click('#potd [data-play=together]');
@@ -287,6 +315,87 @@ const paintedCount = (page) => page.evaluate(() => window.__pt.state.board.paint
     await f3.goBack();
     await f3.waitForSelector('#home:not(.hidden)');
     await Promise.all([f1, f2, f3].map((p) => p.context().close()));
+
+    step('pixel brush: the host locks the picture to a 16 px brush');
+    const host = await newPlayer(browser, 'Hope');
+    await host.setInputFiles('#fileInput', { name: 'brush-house.png', mimeType: 'image/png', buffer: await makeImage(host) });
+    await host.waitForSelector('#createRoomBtn:not([disabled])', { timeout: 30000 });
+    await host.click('#createRoomBtn');
+    await host.waitForSelector('#game:not(.hidden)');
+    assert.ok(await host.isVisible('#settingsBtn'), 'the host gets the settings button');
+    assert.ok(await host.isVisible('#toolLock'), 'new pictures start locked to the host\'s tool');
+    await host.click('#settingsBtn');
+    await host.check('#settingsForm input[value=brush]');
+    await host.selectOption('#settingsForm [name=size]', '16');
+    await host.click('#settingsForm button:has-text("Save")');
+    await host.waitForFunction(() => window.__pt.state.settings.tool === 'brush');
+    const guest = await newPlayer(browser, 'Ivy', host.url());
+    await guest.waitForSelector('#game:not(.hidden)');
+    assert.equal(await guest.isVisible('#settingsBtn'), false, 'guests have no settings');
+    assert.ok(await guest.isDisabled('#tools [data-tool=fill]'), 'guests cannot switch tools while locked');
+    assert.equal(await guest.inputValue('#brushSize'), '16');
+    await guest.screenshot({ path: path.join(SHOTS, '12-brush-locked.png') });
+
+    step('pixel brush: a click does not fill, a drag colours only matching pixels for everyone');
+    // the largest region, so a drag through it can't finish it
+    const largest = await guest.evaluate(() => {
+      const b = window.__pt.state.board;
+      let best = 0;
+      for (let r = 1; r < b.n; r++) if (b.pixStart[r + 1] - b.pixStart[r] > b.pixStart[best + 1] - b.pixStart[best]) best = r;
+      return { r: best, x: b.p.regions[best].x, y: b.p.regions[best].y, c: b.p.regions[best].c };
+    });
+    await paintRegionByClick(guest, largest.r);
+    await guest.waitForTimeout(300);
+    assert.equal(await paintedCount(guest), 0, 'a click with the brush does not fill a region');
+    const dabbed = await brushedCount(guest);
+    assert.ok(dabbed > 0, "the click dabbed a few pixels");
+    const a = await screenOf(guest, largest.x - 30, largest.y), z = await screenOf(guest, largest.x + 30, largest.y);
+    await guest.mouse.move(a.x, a.y);
+    await guest.mouse.down();
+    await guest.mouse.move(z.x, z.y, { steps: 10 });
+    await guest.mouse.up();
+    const brushed = await brushedCount(guest);
+    assert.ok(brushed > dabbed, 'the drag coloured pixels');
+    const wrongPixels = await guest.evaluate((c) => {
+      const b = window.__pt.state.board;
+      let n = 0;
+      b.brushed.forEach((v, i) => { if (v && b.p.regions[b.map[i]].c !== c) n++; });
+      return n;
+    }, largest.c);
+    assert.equal(wrongPixels, 0, 'only pixels with the selected number are coloured');
+    await host.waitForFunction((n) => window.__pt.state.board.brushed.reduce((a, b) => a + b, 0) === n, brushed);
+
+    step('pixel brush: covering a whole region completes it');
+    const small = await guest.evaluate(() => {
+      const b = window.__pt.state.board;
+      let best = -1;
+      for (let r = 0; r < b.n; r++) {
+        const size = b.pixStart[r + 1] - b.pixStart[r];
+        if (size > 300 && (best < 0 || size < b.pixStart[best + 1] - b.pixStart[best])) best = r;
+      }
+      return best;
+    });
+    await brushRegion(guest, small, 8);
+    await host.waitForFunction((r) => window.__pt.state.board.painted[r] === 1, small);
+    await guest.reload();
+    await guest.waitForSelector('#game:not(.hidden)');
+    assert.equal(await brushedCount(guest), await brushedCount(host), 'brushed pixels are kept');
+
+    step('pixel brush: the host unlocks it and a guest picks the fill bucket');
+    await host.click('#settingsBtn');
+    await host.uncheck('#settingsForm [name=locked]');
+    await host.click('#settingsForm button:has-text("Save")');
+    await guest.waitForSelector('#tools [data-tool=fill]:not([disabled])');
+    await guest.click('#tools [data-tool=fill]');
+    const fillable = await guest.evaluate(() => {
+      const b = window.__pt.state.board;
+      for (let r = 0; r < b.n; r++) if (!b.painted[r] && b.p.regions[r].r > 6) return r;
+      return -1;
+    });
+    await paintRegionByClick(guest, fillable);
+    await host.waitForFunction((r) => window.__pt.state.board.painted[r] === 1, fillable);
+    await guest.screenshot({ path: path.join(SHOTS, '13-brush-game.png') });
+    await Promise.all([host, guest].map((p) => p.context().close()));
 
     step('Full HD: a 2400x1600 upload is reduced to fit 1920x1080');
     const q = await newPlayer(browser, 'Quinn');
