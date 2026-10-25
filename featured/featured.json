@@ -9,7 +9,7 @@
       "detail": "medium",
       "artist": {
         "name": "Paint Together Studio",
-        "bio": "Sample artwork bundled with the game. Swap in your own featured artists in featured/featured.json.",
+        "bio": "Sample artwork bundled with the game. Replace it with your own featured artists from the admin page.",
         "links": [
           { "label": "Website", "url": "https://example.com/" },
           { "label": "Instagram", "url": "https://example.com/instagram" }

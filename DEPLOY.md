@@ -248,9 +248,9 @@ Saved games live in the `paint-data` volume and are kept across updates.
 
 ## Featured pictures and artists
 
-Edit `featured/featured.json` and add images under `featured/` (see README). To change them without rebuilding,
-uncomment the `../featured:/app/featured:ro` line in `deploy/docker-compose.https.yml` and run the start command
-again; after that, edits to the folder show up on their own. Only feature artwork you have permission to use.
+Add, edit, reorder and delete featured pictures and artists on the admin page (see README). They're saved in the
+`paint-data` volume next to everything else, so updates and restarts keep them. Only feature artwork you have
+permission to use.
 
 ## Backups
 

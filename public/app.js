@@ -81,7 +81,7 @@
     storage(m) { state.storage = m; renderStorage(); updateCreateStats(); },
     roomDeleted(m) {
       if (state.room && state.room.id === m.roomId) {
-        toast(`“${m.title}” was deleted by its creator.`, null, 5000);
+        toast(`“${m.title}” was ${m.byAdmin ? 'removed by the admin' : 'deleted by its creator'}.`, null, 5000);
         go('/');
       }
     },

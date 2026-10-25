@@ -3,8 +3,7 @@ FROM node:22-slim
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000 \
-    DATA_DIR=/data \
-    FEATURED_DIR=/app/featured
+    DATA_DIR=/data
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
@@ -16,7 +15,7 @@ COPY featured ./featured
 RUN mkdir -p /data && chown node:node /data
 USER node
 
-# pictures, players and progress live here: mount a volume to keep them
+# pictures, players, progress and the featured pictures you edit live here: mount a volume to keep them
 VOLUME /data
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \

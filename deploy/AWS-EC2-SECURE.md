@@ -146,7 +146,7 @@ one domain can get per week.
 
 ## 9. Using the admin page
 
-The admin page (approving storage requests) answers **404** on your public domain. To use it, open an SSH tunnel
+The admin page (featured pictures, storage requests, removing players' pictures) answers **404** on your public domain. To use it, open an SSH tunnel
 from your own computer:
 
 ```bash

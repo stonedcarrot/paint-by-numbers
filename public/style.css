@@ -231,3 +231,22 @@ input[type=range] { accent-color: var(--accent); padding: 0; border: 0; }
 .admin-table th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px 8px; }
 .admin-table td { padding: 8px; border-top: 1px solid var(--line); vertical-align: middle; }
 .row > .mb-input { flex: 0 0 90px; width: 90px; }
+.admin-nav { margin-bottom: 4px; }
+.admin-nav .btn { text-decoration: none; }
+.admin-table .thumb { width: 72px; height: 54px; object-fit: cover; border-radius: 8px; display: block; background: var(--line); }
+.admin-table .actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.admin-table tr.editing td { background: var(--accent-soft); }
+.tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 99px; background: var(--accent-soft); color: #b5381c; font-weight: 600; }
+.tag.bad { background: #fde2e2; color: #a12020; }
+.feat-form { margin-top: 12px; display: flex; flex-direction: column; gap: 12px; }
+.feat-grid { display: grid; grid-template-columns: 220px 1fr; gap: 16px; }
+.feat-image { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.feat-image img { width: 100%; max-height: 220px; object-fit: contain; border-radius: 10px; background: var(--bg); }
+.feat-fields { display: flex; flex-direction: column; gap: 10px; }
+.feat-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.feat-fields textarea { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; resize: vertical; }
+.feat-fields .row.wrap { flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.feat-fields .row.wrap .mb-input { width: 90px; }
+.link-row { margin-bottom: 6px; }
+.link-row input:first-child { flex: 0 0 130px; width: 130px; }
+@media (max-width: 640px) { .feat-grid { grid-template-columns: 1fr; } }

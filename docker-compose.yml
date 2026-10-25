@@ -6,11 +6,9 @@ services:
       - "3000:3000"
     volumes:
       - paint-data:/data
-      # Uncomment to manage featured pictures and artists from a folder on the host:
-      # - ./featured:/app/featured:ro
     restart: unless-stopped
     environment:
-      # Password for the admin page at /admin (approve storage requests). Leave empty to turn it off.
+      # Password for the admin page at /admin (storage requests, featured pictures). Leave empty to turn it off.
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       # Storage each player gets for their own uploaded pictures, in MB.
       UPLOAD_QUOTA_MB: ${UPLOAD_QUOTA_MB:-100}

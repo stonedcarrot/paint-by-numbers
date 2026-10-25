@@ -17,9 +17,8 @@ docker build -t paint-together .
 docker run -d --name paint-together -p 3000:3000 -v paint-data:/data paint-together
 ```
 
-Pictures, players, friends and painting progress are stored in the `/data` volume, so they survive restarts and
-upgrades. To manage the featured pictures from the host instead of rebuilding the image, mount your own folder:
-`-v "$PWD/featured:/app/featured:ro"` (see the commented line in `docker-compose.yml`).
+Pictures, players, friends, painting progress and the featured pictures are stored in the `/data` volume, so they
+survive restarts and upgrades. Featured pictures are edited on the admin page (see below).
 
 To put it on the internet for free (Oracle Cloud, Google Cloud, AWS, Render or your own computer), with
 automatic HTTPS, follow **[DEPLOY.md](DEPLOY.md)**.
@@ -71,7 +70,8 @@ Each player gets **100 MB** for pictures they upload (set `UPLOAD_QUOTA_MB` to c
 under **Your pictures** on the home page, where players can delete their own pictures to free space or click
 **Request more space** to ask for a higher limit with a short note. Featured pictures don't count.
 
-Requests go to the admin page at `/admin`. In the public HTTPS setup (`deploy/`) that page is blocked on the public
+Requests go to the admin page at `/admin`, which is also where you manage the featured pictures and can delete any
+player's uploaded picture (anyone painting it is sent home, and the owner gets the space back). In the public HTTPS setup (`deploy/`) that page is blocked on the public
 domain and opened through an SSH tunnel instead; see [deploy/AWS-EC2-SECURE.md](deploy/AWS-EC2-SECURE.md#9-using-the-admin-page). Turn it on by setting the `ADMIN_TOKEN` environment variable to a long
 random password (for example from `openssl rand -hex 24`), then sign in with it. The page lists waiting requests
 (**Set limit** to approve with any amount, or **Decline**) and every player's usage, so you can change anyone's
@@ -84,35 +84,25 @@ docker run -d --name paint-together -p 3000:3000 -v paint-data:/data \
 
 ### Featuring artists
 
-Featured pictures live in the `featured/` folder: put the image (PNG, JPEG, WebP or SVG) in it and add an entry to
-`featured/featured.json`:
+Manage featured pictures in the **Featured pictures** section of the admin page:
 
-```json
-{
-  "id": "harbour-morning",
-  "title": "Harbour Morning",
-  "image": "art/harbour-morning.jpg",
-  "colors": 16,
-  "detail": "medium",
-  "date": "2026-11-02",
-  "artist": {
-    "name": "Artist Name",
-    "bio": "One or two lines about the artist.",
-    "links": [
-      { "label": "Instagram", "url": "https://instagram.com/..." },
-      { "label": "Shop", "url": "https://..." }
-    ]
-  }
-}
-```
+- **Add a featured picture**: choose an image (PNG, JPEG, WebP, GIF or SVG, up to 20 MB; anything larger than
+  Full HD is scaled down), give it a title, the artist's name, a short bio and up to six links (each must start with
+  `https://`), and pick the number of colours and the detail level. The server turns it into a puzzle before
+  publishing, so a picture that can't be converted is never shown to players.
+- **Picture of the day**: set a date to make it the Picture of the day on that day (UTC). Only one picture can own a
+  date; on days with no pinned picture, the undated pictures rotate daily.
+- **Edit** changes any of the above, including swapping the image; **↑ / ↓** set the order on the home page;
+  **Delete** removes it from the home page (people already painting it can finish).
 
-`date` is optional. A picture whose date is today (UTC) is the Picture of the day; on other days the undated pictures
-rotate daily. `colors` is 4 to 30, `detail` is `low`, `medium` or `high`, and links must start with `https://`. The
-server turns each image into a puzzle once and caches it in `/data`. Edits to `featured.json` are picked up without a
-restart. Only feature artwork you have the artist's permission to use.
+Changes show up for players straight away. Everything is saved in the data volume under `/data/featured`
+(`featured.json` plus the images in `art/`). The first time the server starts with an empty data volume it copies
+in the six bundled sample pictures from the image's `featured/` folder; they're simple illustrations made for this
+project with placeholder `example.com` links, so replace or delete them. To keep the featured pictures in a folder of
+your own instead, set `FEATURED_DIR` to it (the admin page then edits that folder, so it must be writable).
 
-The six bundled pictures are simple sample illustrations made for this project, and their `example.com` links are
-placeholders: replace them with your featured artists.
+The home page only downloads small preview images of the featured pictures, never the full-size originals. Only
+feature artwork you have the artist's permission to use.
 
 ### Friends
 
@@ -129,8 +119,8 @@ picture.
 - `public/pbn.js`: the image → paint-by-numbers converter (blur, k-means colour clustering in Lab space, mode-filter
   smoothing, connected regions, merging tiny regions, and a distance transform to place each number at the most
   open spot in its region). It runs in a Web Worker in the browser, so the server never processes images.
-- `featured.js`: loads `featured/featured.json`, converts featured images into puzzles on the server (with
-  [sharp](https://sharp.pixelplumbing.com/)) and picks the Picture of the day.
+- `featured.js`: loads `featured.json`, converts featured images into puzzles on the server (with
+  [sharp](https://sharp.pixelplumbing.com/)), picks the Picture of the day, and saves the admin page's edits.
 - `server.js`: a small Node server (dependencies: `ws`, `sharp`) serving the client and a WebSocket API for rooms (max
   10 players), painting (validated against the puzzle), cursors, chat, friends and invites.
 - Pictures and players are saved as JSON under `data/` (set `DATA_DIR` to change), so games survive restarts.

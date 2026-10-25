@@ -21,9 +21,57 @@
       </form>
       <p class="stats" id="msg"></p>
       <div id="panel" class="hidden">
-        <h2>Storage requests</h2>
+        <nav class="seg admin-nav">
+          <a class="btn small" href="#featuredSection">Featured</a>
+          <a class="btn small" href="#requestsSection">Storage requests</a>
+          <a class="btn small" href="#picturesSection">Players' pictures</a>
+          <a class="btn small" href="#usersSection">All players</a>
+        </nav>
+        <h2 id="featuredSection">Featured pictures</h2>
+        <p class="stats">The home page shows these in this order. A picture pinned to a date is the Picture of the day on that date (UTC); other days rotate through the unpinned ones.</p>
+        <div class="card"><table class="admin-table" id="featured"></table></div>
+        <form class="card feat-form" id="featForm">
+          <h3 id="featFormTitle">Add a featured picture</h3>
+          <div class="feat-grid">
+            <div class="feat-image">
+              <img id="featPreview" alt="" class="hidden">
+              <label class="btn">Choose image<input type="file" id="featFile" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" hidden></label>
+              <p class="stats" id="featFileInfo">PNG, JPEG, WebP, GIF or SVG, up to 20 MB. Bigger than Full HD is scaled down.</p>
+            </div>
+            <div class="feat-fields">
+              <label>Title <input id="featTitle" maxlength="60" required></label>
+              <label>Artist <input id="featArtist" maxlength="60" required></label>
+              <label>About the artist <textarea id="featBio" maxlength="400" rows="3"></textarea></label>
+              <div>
+                <div class="stats">Links (must start with https://)</div>
+                <div id="featLinks"></div>
+                <button type="button" class="btn small" id="featAddLink">+ Add link</button>
+              </div>
+              <div class="row wrap">
+                <label>Colours <input type="number" id="featColors" min="4" max="30" value="16" class="mb-input"></label>
+                <label>Detail
+                  <select id="featDetail">
+                    <option value="low">Low</option>
+                    <option value="medium" selected>Medium</option>
+                    <option value="high">High</option>
+                    <option value="max">Very high</option>
+                  </select>
+                </label>
+                <label>Picture of the day on <input type="date" id="featDate"></label>
+              </div>
+            </div>
+          </div>
+          <div class="row">
+            <button class="btn primary" id="featSave">Add picture</button>
+            <button type="button" class="btn hidden" id="featCancel">Cancel editing</button>
+            <span class="stats" id="featBusy"></span>
+          </div>
+        </form>
+        <h2 id="requestsSection">Storage requests</h2>
         <div class="card"><table class="admin-table" id="requests"></table></div>
-        <h2>All players</h2>
+        <h2 id="picturesSection">Players' pictures</h2>
+        <div class="card"><table class="admin-table" id="pictures"></table></div>
+        <h2 id="usersSection">All players</h2>
         <div class="card"><table class="admin-table" id="users"></table></div>
       </div>
     </main>

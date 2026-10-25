@@ -12,7 +12,9 @@ const { createFeatured } = require('./featured.js');
 const PORT = Number(process.env.PORT) || 3000;
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const FEATURED_DIR = path.resolve(process.env.FEATURED_DIR || path.join(__dirname, 'featured'));
+// Featured pictures live with the saved data so the admin page can edit them; the bundled set seeds a new install.
+const BUNDLED_FEATURED = path.join(__dirname, 'featured');
+const FEATURED_DIR = path.resolve(process.env.FEATURED_DIR || path.join(DATA_DIR, 'featured'));
 const MAX_PLAYERS = 10;
 const MB = 1000 * 1000;
 // Storage each player gets for their own uploaded pictures; admins can raise it per player.
@@ -22,6 +24,10 @@ const PLAYER_COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
   '#42d4f4', '#f032e6', '#9a6324', '#469990', '#808000'];
 
 fs.mkdirSync(path.join(DATA_DIR, 'rooms'), { recursive: true });
+if (!fs.existsSync(path.join(FEATURED_DIR, 'featured.json')) && FEATURED_DIR !== BUNDLED_FEATURED) {
+  fs.cpSync(BUNDLED_FEATURED, FEATURED_DIR, { recursive: true });
+  console.log('Copied the starter featured pictures to', FEATURED_DIR);
+}
 const featured = createFeatured({ dir: FEATURED_DIR, cacheDir: path.join(DATA_DIR, 'featured-cache') });
 
 // ---------- persistence helpers ----------
@@ -164,6 +170,25 @@ function deleteRoomData(room) {
   rooms.delete(room.id);
 }
 
+// Deletes a picture for good: players inside are sent home and its owner gets the storage back.
+function removeRoom(room, notice) {
+  const inside = new Set();
+  for (const p of [...room.players.values()]) {
+    inside.add(p.ws.user.id);
+    send(p.ws, { type: 'roomDeleted', roomId: room.id, title: room.title, byAdmin: !!notice });
+    leaveRoom(p.ws);
+  }
+  deleteRoomData(room);
+  const owner = users.get(room.createdBy);
+  if (!owner) return;
+  owner.uploads = (owner.uploads || []).filter((x) => x.roomId !== room.id);
+  pull(owner.recent, room.id);
+  saveUsers();
+  sendStorage(owner);
+  sendUser(owner.id, { type: 'recent', recent: recentRooms(owner) });
+  if (notice && !inside.has(owner.id)) sendUser(owner.id, { type: 'notice', message: notice });
+}
+
 function validatePuzzle(p) {
   if (!p || typeof p !== 'object') throw new Error('missing puzzle');
   const { w, h, palette, regions, rle } = p;
@@ -286,7 +311,7 @@ function featuredPayload() {
     date: pod && pod.date,
     today: pod && pod.picture.id,
     pictures: featured.list().map((p) => ({
-      id: p.id, title: p.title, image: p.image, artist: p.artist,
+      id: p.id, title: p.title, image: `/featured-thumb/${p.id}.jpg?v=${encodeURIComponent(path.basename(p.file))}`, artist: p.artist,
       playing: (featuredRooms[p.id] || []).reduce((n, id) => n + (rooms.get(id)?.players.size || 0), 0),
     })),
   };
@@ -361,16 +386,7 @@ const handlers = {
     if (!room || room.createdBy !== u.id || room.mode === 'public') {
       return send(ws, { type: 'error', code: 'delete', message: 'Only the person who created a picture can delete it.' });
     }
-    for (const p of [...room.players.values()]) {
-      send(p.ws, { type: 'roomDeleted', roomId: room.id, title: room.title });
-      leaveRoom(p.ws);
-    }
-    deleteRoomData(room);
-    u.uploads = (u.uploads || []).filter((x) => x.roomId !== room.id);
-    pull(u.recent, room.id);
-    saveUsers();
-    sendStorage(u);
-    send(ws, { type: 'recent', recent: recentRooms(u) });
+    removeRoom(room);
   },
 
   requestStorage(ws, m) {
@@ -529,13 +545,48 @@ function adminUsers() {
   })).sort((a, b) => (!!b.request - !!a.request) || ((b.request?.at || 0) - (a.request?.at || 0)) || b.used - a.used);
 }
 
-function readJson(req) {
+function readJson(req, maxBytes = 10000) {
   return new Promise((resolve, reject) => {
-    let body = '';
-    req.on('data', (c) => { body += c; if (body.length > 10000) { reject(new Error('too big')); req.destroy(); } });
-    req.on('end', () => { try { resolve(JSON.parse(body || '{}')); } catch (e) { reject(e); } });
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > maxBytes) { reject(Object.assign(new Error('too big'), { tooBig: true })); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); } catch (e) { reject(e); } });
+    req.on('error', reject);
   });
 }
+
+// players' own uploads, newest first
+function adminPictures() {
+  const out = [];
+  for (const u of users.values()) {
+    for (const up of u.uploads || []) {
+      const r = getRoom(up.roomId);
+      if (!r) continue;
+      out.push({ id: r.id, title: r.title, owner: u.name, ownerCode: u.code, bytes: up.bytes, createdAt: r.createdAt,
+        players: r.players.size, progress: r.paintedCount / r.paintedBy.length });
+    }
+  }
+  return out.sort((x, y) => y.createdAt - x.createdAt);
+}
+
+function adminFeatured() {
+  const pod = featured.pictureOfDay();
+  const ok = new Set(featured.list().map((p) => p.id));
+  return {
+    today: pod && pod.picture.id,
+    pictures: (featured.readManifest().pictures || []).map((p) => ({
+      ...p, ok: ok.has(p.id),
+      thumb: ok.has(p.id) ? `/featured-thumb/${p.id}.jpg?v=${encodeURIComponent(path.basename(String(p.image)))}` : null,
+    })),
+  };
+}
+
+const ADMIN_ROUTE = /^\/api\/admin\/(users|quota|deny|featured|featured\/save|featured\/delete|featured\/move|pictures|pictures\/delete|pictures\/preview\/[A-Z2-9]{6})$/;
+const MAX_FEATURED_UPLOAD = 20 * MB;
 
 async function handleAdmin(req, res, route) {
   const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
@@ -545,10 +596,52 @@ async function handleAdmin(req, res, route) {
     await new Promise((r) => setTimeout(r, 800)); // slow down guessing
     return json(401, { error: 'Wrong admin token.' });
   }
-  if (route === 'users' && req.method === 'GET') return json(200, { defaultLimit: DEFAULT_QUOTA, users: adminUsers() });
+  if (req.method === 'GET') {
+    if (route === 'users') return json(200, { defaultLimit: DEFAULT_QUOTA, users: adminUsers() });
+    if (route === 'featured') return json(200, adminFeatured());
+    if (route === 'pictures') return json(200, { pictures: adminPictures() });
+    if (route.startsWith('pictures/preview/')) {
+      const room = getRoom(route.split('/')[2]);
+      const m = room && String(room.puzzle?.preview || '').match(/^data:(image\/(?:jpeg|png|webp));base64,(.+)$/);
+      if (!m) return json(404, { error: 'No preview' });
+      res.writeHead(200, { 'Content-Type': m[1], 'Cache-Control': 'private, max-age=600' });
+      return res.end(Buffer.from(m[2], 'base64'));
+    }
+    return json(405, { error: 'Method not allowed' });
+  }
   if (req.method !== 'POST') return json(405, { error: 'Method not allowed' });
   let body;
-  try { body = await readJson(req); } catch { return json(400, { error: 'Bad JSON' }); }
+  try { body = await readJson(req, route === 'featured/save' ? MAX_FEATURED_UPLOAD * 1.4 : 10000); } catch (e) {
+    return json(e.tooBig ? 413 : 400, { error: e.tooBig ? 'That image is too big (20 MB at most).' : 'Bad JSON' });
+  }
+
+  if (route.startsWith('featured/')) {
+    try {
+      if (route === 'featured/save') {
+        let image = null;
+        if (body.image) {
+          const m = String(body.image).match(/^data:[^;,]*;base64,(.*)$/);
+          if (!m) return json(400, { error: 'Bad image upload' });
+          image = Buffer.from(m[1], 'base64');
+        }
+        const prev = body.id && (featured.readManifest().pictures || []).find((p) => p.id === body.id);
+        const id = await featured.save({ ...body, previousImage: prev && prev.image }, image);
+        return json(200, { ok: true, id });
+      }
+      if (route === 'featured/delete') featured.remove(String(body.id || ''));
+      if (route === 'featured/move') featured.move(String(body.id || ''), Number(body.delta) || 1);
+      return json(200, { ok: true });
+    } catch (e) {
+      return json(400, { error: e.message });
+    }
+  }
+  if (route === 'pictures/delete') {
+    const room = getRoom(String(body.roomId || ''));
+    if (!room || room.featuredId) return json(404, { error: 'That picture no longer exists.' });
+    removeRoom(room, `"${room.title}" was removed by the admin.`);
+    return json(200, { ok: true });
+  }
+
   const u = users.get(body.userId);
   if (!u) return json(404, { error: 'No such player' });
   if (route === 'quota') {
@@ -593,7 +686,7 @@ const server = http.createServer((req, res) => {
   let file = url.pathname;
   if (file === '/' || /^\/r\/[A-Za-z0-9]+\/?$/.test(file)) file = '/index.html';
   if (file === '/admin' || file === '/admin/') file = '/admin.html';
-  const admin = file.match(/^\/api\/admin\/(users|quota|deny)$/);
+  const admin = file.match(ADMIN_ROUTE);
   if (admin) {
     handleAdmin(req, res, admin[1]).catch((e) => { console.error('admin error', e); res.writeHead(500); res.end(); });
     return;
@@ -602,6 +695,16 @@ const server = http.createServer((req, res) => {
   if (file === '/api/featured') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
     return res.end(JSON.stringify(featuredPayload()));
+  }
+  const thumb = file.match(/^\/featured-thumb\/([a-z0-9-]{1,40})\.jpg$/);
+  if (thumb) {
+    const pic = featured.get(thumb[1]);
+    if (!pic) { res.writeHead(404); return res.end(); }
+    featured.thumbnail(pic).then((jpg) => {
+      res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' });
+      res.end(jpg);
+    }, () => { res.writeHead(500); res.end(); });
+    return;
   }
   if (file.startsWith('/featured/')) {
     let rel;

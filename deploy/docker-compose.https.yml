@@ -25,13 +25,12 @@ services:
     build: ..
     image: paint-together
     environment:
-      # Password for the admin page (approve storage requests). Leave empty to turn it off.
+      # Password for the admin page (storage requests, featured pictures). Leave empty to turn it off.
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       # Storage each player gets for their own uploaded pictures, in MB.
       UPLOAD_QUOTA_MB: ${UPLOAD_QUOTA_MB:-100}
     volumes:
       - paint-data:/data
-      # - ../featured:/app/featured:ro   # manage featured pictures from the host
     ports:
       # Only reachable from the server itself, for the admin page over an SSH tunnel.
       # Players always come in through Caddy.
